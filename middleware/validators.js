@@ -25,18 +25,34 @@ export const registerValidation = [
   body('phone').trim().notEmpty().withMessage('Phone number is required'),
 ];
 
-export const doctorRegisterValidation = [
+export const clinicAdminRegisterValidation = [
   ...registerValidation,
   body('setupKey').trim().notEmpty().withMessage('Admin setup key is required'),
+];
+
+export const doctorRegisterValidation = [
+  ...registerValidation,
+  body('setupKey').optional().trim(),
+  body('clinicId').optional().isMongoId().withMessage('Valid clinic is required'),
   body('specialization').optional().trim(),
+  body('qualification').optional().trim(),
   body('experience').optional().isInt({ min: 0 }).withMessage('Experience must be 0 or more'),
   body('consultationFee').optional().isInt({ min: 0 }).withMessage('Fee must be 0 or more'),
   body('bio').optional().trim(),
 ];
 
+export const receptionistRegisterValidation = [
+  ...registerValidation,
+  body('clinicId').optional().isMongoId().withMessage('Valid clinic is required'),
+];
+
 export const loginValidation = [
   body('email').isEmail().withMessage('Valid email is required'),
   body('password').notEmpty().withMessage('Password is required'),
+  body('role')
+    .optional()
+    .isIn(['super_admin', 'clinic_admin', 'doctor', 'receptionist', 'patient'])
+    .withMessage('Invalid role'),
 ];
 
 export const appointmentValidation = [
@@ -44,6 +60,7 @@ export const appointmentValidation = [
   body('appointmentDate').isISO8601().withMessage('Valid appointment date is required'),
   body('timeSlot').trim().notEmpty().withMessage('Time slot is required'),
   body('reason').trim().notEmpty().withMessage('Reason for visit is required'),
+  body('patientId').optional().isMongoId().withMessage('Valid patient ID is required'),
 ];
 
 export const ratingValidation = [

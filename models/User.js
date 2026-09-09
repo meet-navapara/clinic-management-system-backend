@@ -1,6 +1,14 @@
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 
+export const USER_ROLES = [
+  'super_admin',
+  'clinic_admin',
+  'doctor',
+  'receptionist',
+  'patient',
+];
+
 const userSchema = new mongoose.Schema(
   {
     name: {
@@ -28,11 +36,22 @@ const userSchema = new mongoose.Schema(
     },
     role: {
       type: String,
-      enum: ['patient', 'doctor'],
+      enum: USER_ROLES,
       required: true,
+    },
+    clinicId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Clinic',
+      default: null,
+      index: true,
     },
     // Doctor-specific fields
     specialization: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    qualification: {
       type: String,
       trim: true,
       default: '',

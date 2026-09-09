@@ -8,6 +8,7 @@ import authRoutes from './routes/authRoutes.js';
 import doctorRoutes from './routes/doctorRoutes.js';
 import appointmentRoutes from './routes/appointmentRoutes.js';
 import ratingRoutes from './routes/ratingRoutes.js';
+import clinicRoutes from './routes/clinicRoutes.js';
 
 dotenv.config();
 connectDB();
@@ -26,6 +27,7 @@ app.get('/api/health', (req, res) => {
 });
 
 app.use('/api/auth', authRoutes);
+app.use('/api/clinics', clinicRoutes);
 app.use('/api/doctors', doctorRoutes);
 app.use('/api/appointments', appointmentRoutes);
 app.use('/api/ratings', ratingRoutes);

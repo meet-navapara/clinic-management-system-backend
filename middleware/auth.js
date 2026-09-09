@@ -20,6 +20,13 @@ export const protect = async (req, res, next) => {
       return res.status(401).json({ success: false, message: 'User no longer exists.' });
     }
 
+    if (user.isActive === false) {
+      return res.status(403).json({
+        success: false,
+        message: 'Your account has been deactivated. Contact your clinic admin.',
+      });
+    }
+
     req.user = user;
     next();
   } catch {
@@ -37,4 +44,31 @@ export const authorize = (...roles) => {
     }
     next();
   };
+};
+
+/** Require the authenticated user to belong to a clinic. */
+export const requireClinic = (req, res, next) => {
+  if (!req.user?.clinicId) {
+    return res.status(403).json({
+      success: false,
+      message: 'No clinic is associated with this account.',
+    });
+  }
+  next();
+};
+
+/** True if resource belongs to the user's clinic (super_admin bypasses). */
+export const isSameClinic = (user, resourceClinicId) => {
+  if (!user) return false;
+  if (user.role === 'super_admin') return true;
+  if (!resourceClinicId || !user.clinicId) return false;
+  return String(resourceClinicId) === String(user.clinicId);
+};
+
+/** Mongo filter for clinic-scoped queries. */
+export const clinicScopeFilter = (user) => {
+  if (!user) return {};
+  if (user.role === 'super_admin') return {};
+  if (!user.clinicId) return { clinicId: null };
+  return { clinicId: user.clinicId };
 };

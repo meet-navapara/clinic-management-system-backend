@@ -10,7 +10,7 @@ const router = Router();
 
 router.get('/', getDoctors);
 router.get('/specializations', getSpecializations);
-router.get('/:id', getDoctorById);
 router.get('/:id/availability', getDoctorAvailability);
+router.get('/:id', getDoctorById);
 
 export default router;

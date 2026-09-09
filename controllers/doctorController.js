@@ -4,8 +4,12 @@ import { attachRatingStats, attachRatingStatsOne } from '../utils/ratingStats.js
 
 export const getDoctors = async (req, res) => {
   try {
-    const { specialization, search } = req.query;
+    const { specialization, search, clinicId } = req.query;
     const filter = { role: 'doctor', isActive: true };
+
+    if (clinicId) {
+      filter.clinicId = clinicId;
+    }
 
     if (specialization) {
       filter.specialization = { $regex: specialization, $options: 'i' };
@@ -18,9 +22,9 @@ export const getDoctors = async (req, res) => {
       ];
     }
 
-    const doctors = await User.find(filter).select(
-      '-password -email -phone -availableDays -availableSlots'
-    );
+    const doctors = await User.find(filter)
+      .select('-password -email -phone -availableDays -availableSlots')
+      .sort({ name: 1 });
 
     const doctorsWithRatings = await attachRatingStats(doctors);
 
@@ -50,8 +54,8 @@ export const getDoctorById = async (req, res) => {
 
 export const getDoctorAvailability = async (req, res) => {
   try {
-    const doctor = await User.findOne({ _id: req.params.id, role: 'doctor' }).select(
-      'availableDays availableSlots name'
+    const doctor = await User.findOne({ _id: req.params.id, role: 'doctor', isActive: true }).select(
+      'availableDays availableSlots name clinicId isActive'
     );
 
     if (!doctor) {
@@ -80,6 +84,8 @@ export const getDoctorAvailability = async (req, res) => {
 
     res.json({
       success: true,
+      doctorId: doctor._id,
+      clinicId: doctor.clinicId || null,
       availableDays: doctor.availableDays,
       availableSlots,
       bookedSlots,
@@ -91,11 +97,15 @@ export const getDoctorAvailability = async (req, res) => {
 
 export const getSpecializations = async (req, res) => {
   try {
-    const specializations = await User.distinct('specialization', {
+    const { clinicId } = req.query;
+    const match = {
       role: 'doctor',
       isActive: true,
       specialization: { $ne: '' },
-    });
+    };
+    if (clinicId) match.clinicId = clinicId;
+
+    const specializations = await User.distinct('specialization', match);
 
     res.json({ success: true, specializations });
   } catch (error) {
