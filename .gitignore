@@ -1,0 +1,16 @@
+# Dependencies
+node_modules/
+
+# User uploads
+uploads/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
