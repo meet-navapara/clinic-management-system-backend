@@ -7,11 +7,22 @@ import connectDB from './config/db.js';
 import authRoutes from './routes/authRoutes.js';
 import doctorRoutes from './routes/doctorRoutes.js';
 import appointmentRoutes from './routes/appointmentRoutes.js';
-import ratingRoutes from './routes/ratingRoutes.js';
 import clinicRoutes from './routes/clinicRoutes.js';
+import patientRoutes from './routes/patientRoutes.js';
+import adminRoutes from './routes/adminRoutes.js';
+import notificationRoutes from './routes/notificationRoutes.js';
+import { startReminderScheduler } from './utils/reminderScheduler.js';
+import { migratePracticeDomain } from './utils/migratePracticeDomain.js';
 
 dotenv.config();
-connectDB();
+connectDB().then(async () => {
+  try {
+    await migratePracticeDomain();
+  } catch (err) {
+    console.warn('Practice domain migrate skipped:', err.message);
+  }
+  startReminderScheduler();
+});
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -29,8 +40,10 @@ app.get('/api/health', (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/clinics', clinicRoutes);
 app.use('/api/doctors', doctorRoutes);
+app.use('/api/patients', patientRoutes);
+app.use('/api/admin', adminRoutes);
+app.use('/api/notifications', notificationRoutes);
 app.use('/api/appointments', appointmentRoutes);
-app.use('/api/ratings', ratingRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ success: false, message: 'Route not found.' });

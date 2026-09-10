@@ -1,94 +1,48 @@
 # Shreeshakti Ayurveda — Backend API
 
-Express.js API for the Shreeshakti Ayurveda appointment booking system. Handles JWT authentication, doctor/patient accounts, appointment scheduling, and WhatsApp confirmation links.
+Doctor-centric practice management API (Express + MongoDB).
 
-## Tech Stack
+## Users
 
-- Node.js, Express.js
-- MongoDB Atlas with Mongoose
-- JWT authentication + bcrypt
-- WhatsApp redirect via wa.me API
+- **clinic_admin / super_admin** — doctor approval and clinic overview
+- **doctor** — patients, appointments, reminders (must be `approved`)
 
-## Prerequisites
+Patient self-registration and login are disabled. Patients are doctor-owned records (`PAT-######`).
 
-- Node.js 18+
-- MongoDB Atlas account (or local MongoDB)
-
-## Installation
+## Setup
 
 ```bash
 npm install
-
-cp .env.example .env
-# Edit .env with your MongoDB URI, JWT secret, and other values
-
-node seed.js
+cp .env.example .env   # set MONGODB_URI, JWT_SECRET, ADMIN_SETUP_SECRET
+npm run dev            # port 5000
 ```
 
-## Environment Variables
+## Environment
 
-| Variable | Description |
-|----------|-------------|
-| `PORT` | API port (default: 5000) |
-| `MONGODB_URI` | MongoDB connection string |
-| `JWT_SECRET` | Secret for signing JWT tokens |
-| `JWT_EXPIRES_IN` | Token expiry (e.g. `7d`) |
-| `WHATSAPP_CLINIC_NUMBER` | Clinic WhatsApp number (country code + number, no `+`) |
-| `ADMIN_SETUP_SECRET` | Secret required for one-time doctor admin setup |
+| Variable | Purpose |
+|----------|---------|
+| `PORT` | API port (default 5000) |
+| `MONGODB_URI` | MongoDB connection |
+| `JWT_SECRET` | JWT signing |
+| `JWT_EXPIRES_IN` | Token lifetime (e.g. `7d`) |
+| `ADMIN_SETUP_SECRET` | One-time clinic admin bootstrap |
+| `WHATSAPP_CLINIC_NUMBER` | Optional WhatsApp deep-link fallback |
 
-Example:
+## Core API groups
 
-```
-WHATSAPP_CLINIC_NUMBER=<your-clinic-whatsapp-number>
-```
+- `/api/auth` — doctor + admin login/register, profile
+- `/api/patients` — doctor-scoped patient records
+- `/api/appointments` — book, status, reschedule, dashboard stats
+- `/api/notifications` — patient reminder logs + doctor inbox
+- `/api/admin` — doctor approval and stats
+- `/api/doctors` — authenticated availability (no public marketplace)
 
-## Scripts
+## Reminders
+
+A 60s in-process scheduler processes due `NotificationLog` rows (confirmation + hours-before). Delivery is logged (+ optional WhatsApp link) until an SMS/WhatsApp Business provider is configured.
+
+## Tests
 
 ```bash
-npm run dev    # Start with file watch (port 5000)
-npm start      # Start production server
-node seed.js   # Seed demo doctor account
-```
-
-## Demo Credentials
-
-After running `node seed.js`:
-
-| Role   | Email                        | Password  |
-|--------|------------------------------|-----------|
-| Doctor | priya.sharma@shreeshakti.com | doctor123 |
-
-Patients register through the frontend at `/register`.
-
-## API Endpoints
-
-| Method | Endpoint | Auth | Description |
-|--------|----------|------|-------------|
-| GET | `/api/auth/setup-status` | Public | Check if doctor exists |
-| POST | `/api/auth/register` | Public | Register patient |
-| POST | `/api/auth/register/doctor` | Public | One-time doctor admin setup |
-| POST | `/api/auth/login` | Public | Login (any role) |
-| GET | `/api/auth/me` | JWT | Get current user |
-| PUT | `/api/auth/profile` | JWT | Update profile |
-| GET | `/api/doctors` | Public | List all doctors |
-| GET | `/api/doctors/:id` | Public | Doctor details |
-| GET | `/api/doctors/:id/availability` | Public | Available slots for date |
-| POST | `/api/appointments` | Patient | Book appointment |
-| GET | `/api/appointments/my` | JWT | My appointments |
-| PATCH | `/api/appointments/:id/status` | JWT | Update status |
-| GET | `/api/appointments/:id/whatsapp` | JWT | Get WhatsApp link |
-
-## Project Structure
-
-```
-backend/
-├── config/       → Database configuration
-├── controllers/  → Route handlers
-├── middleware/   → Auth and validation
-├── models/       → Mongoose schemas
-├── routes/       → API routes
-├── uploads/      → Profile photo uploads (gitignored)
-├── utils/        → Helpers (tokens, WhatsApp)
-├── seed.js       → Demo data seeder
-└── server.js     → App entry point
+node --test tests/*.test.js
 ```

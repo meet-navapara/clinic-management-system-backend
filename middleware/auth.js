@@ -21,10 +21,13 @@ export const protect = async (req, res, next) => {
     }
 
     if (user.isActive === false) {
-      return res.status(403).json({
-        success: false,
-        message: 'Your account has been deactivated. Contact your clinic admin.',
-      });
+      const isStatusCheck = req.method === 'GET' && req.path === '/me';
+      if (!isStatusCheck) {
+        return res.status(403).json({
+          success: false,
+          message: 'Your account has been deactivated. Contact your clinic admin.',
+        });
+      }
     }
 
     req.user = user;
@@ -44,6 +47,26 @@ export const authorize = (...roles) => {
     }
     next();
   };
+};
+
+/** Block unapproved / suspended doctors from clinical APIs. */
+export const requireApprovedDoctor = (req, res, next) => {
+  if (req.user.role !== 'doctor') return next();
+  if (req.user.approvalStatus === 'approved' && req.user.isActive !== false) {
+    return next();
+  }
+  const status = req.user.approvalStatus || 'pending';
+  const message =
+    status === 'suspended'
+      ? 'Your doctor account is suspended.'
+      : status === 'rejected'
+        ? 'Your doctor account was not approved.'
+        : 'Your doctor account is awaiting admin approval.';
+  return res.status(403).json({
+    success: false,
+    message,
+    approvalStatus: status,
+  });
 };
 
 /** Require the authenticated user to belong to a clinic. */

@@ -1,15 +1,25 @@
 import User from '../models/User.js';
 import Appointment from '../models/Appointment.js';
-import { attachRatingStats, attachRatingStatsOne } from '../utils/ratingStats.js';
+import { ACTIVE_APPOINTMENT_STATUSES } from '../models/Appointment.js';
+
+const clinicScopedFilter = (req, base = {}) => {
+  const filter = { ...base };
+  if (req.user.role === 'doctor' || req.user.role === 'clinic_admin') {
+    if (req.user.clinicId) filter.clinicId = req.user.clinicId;
+  } else if (req.query.clinicId) {
+    filter.clinicId = req.query.clinicId;
+  }
+  return filter;
+};
 
 export const getDoctors = async (req, res) => {
   try {
-    const { specialization, search, clinicId } = req.query;
-    const filter = { role: 'doctor', isActive: true };
-
-    if (clinicId) {
-      filter.clinicId = clinicId;
-    }
+    const { specialization, search } = req.query;
+    const filter = clinicScopedFilter(req, {
+      role: 'doctor',
+      isActive: true,
+      approvalStatus: 'approved',
+    });
 
     if (specialization) {
       filter.specialization = { $regex: specialization, $options: 'i' };
@@ -23,12 +33,10 @@ export const getDoctors = async (req, res) => {
     }
 
     const doctors = await User.find(filter)
-      .select('-password -email -phone -availableDays -availableSlots')
+      .select('-password')
       .sort({ name: 1 });
 
-    const doctorsWithRatings = await attachRatingStats(doctors);
-
-    res.json({ success: true, count: doctorsWithRatings.length, doctors: doctorsWithRatings });
+    res.json({ success: true, count: doctors.length, doctors });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -36,17 +44,25 @@ export const getDoctors = async (req, res) => {
 
 export const getDoctorById = async (req, res) => {
   try {
-    const doctor = await User.findOne({ _id: req.params.id, role: 'doctor', isActive: true }).select(
-      '-password'
-    );
+    const filter = clinicScopedFilter(req, {
+      _id: req.params.id,
+      role: 'doctor',
+      isActive: true,
+      approvalStatus: 'approved',
+    });
+
+    const doctor = await User.findOne(filter).select('-password');
 
     if (!doctor) {
       return res.status(404).json({ success: false, message: 'Doctor not found.' });
     }
 
-    const doctorWithRatings = await attachRatingStatsOne(doctor);
+    // Doctors may only open their own profile via this public-ish staff route
+    if (req.user.role === 'doctor' && String(doctor._id) !== String(req.user._id)) {
+      return res.status(403).json({ success: false, message: 'Not authorized.' });
+    }
 
-    res.json({ success: true, doctor: doctorWithRatings });
+    res.json({ success: true, doctor });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -54,12 +70,23 @@ export const getDoctorById = async (req, res) => {
 
 export const getDoctorAvailability = async (req, res) => {
   try {
-    const doctor = await User.findOne({ _id: req.params.id, role: 'doctor', isActive: true }).select(
+    const filter = clinicScopedFilter(req, {
+      _id: req.params.id,
+      role: 'doctor',
+      isActive: true,
+      approvalStatus: 'approved',
+    });
+
+    const doctor = await User.findOne(filter).select(
       'availableDays availableSlots name clinicId isActive'
     );
 
     if (!doctor) {
       return res.status(404).json({ success: false, message: 'Doctor not found.' });
+    }
+
+    if (req.user.role === 'doctor' && String(doctor._id) !== String(req.user._id)) {
+      return res.status(403).json({ success: false, message: 'Not authorized.' });
     }
 
     const { date } = req.query;
@@ -74,7 +101,7 @@ export const getDoctorAvailability = async (req, res) => {
       const appointments = await Appointment.find({
         doctor: doctor._id,
         appointmentDate: { $gte: startOfDay, $lte: endOfDay },
-        status: { $ne: 'cancelled' },
+        status: { $in: [...ACTIVE_APPOINTMENT_STATUSES, 'completed'] },
       }).select('timeSlot');
 
       bookedSlots = appointments.map((a) => a.timeSlot);
@@ -97,13 +124,12 @@ export const getDoctorAvailability = async (req, res) => {
 
 export const getSpecializations = async (req, res) => {
   try {
-    const { clinicId } = req.query;
-    const match = {
+    const match = clinicScopedFilter(req, {
       role: 'doctor',
       isActive: true,
+      approvalStatus: 'approved',
       specialization: { $ne: '' },
-    };
-    if (clinicId) match.clinicId = clinicId;
+    });
 
     const specializations = await User.distinct('specialization', match);
 

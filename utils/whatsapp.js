@@ -38,7 +38,7 @@ const formatDate = (value) =>
     : 'Date unavailable';
 
 const buildContext = (appointment, patient, doctor) => ({
-  status: appointment?.status ?? 'pending',
+  status: String(appointment?.status || 'scheduled').toLowerCase(),
   patientName: patient?.name ?? 'Patient',
   patientPhone: patient?.phone ?? '—',
   patientEmail: patient?.email ?? '—',
@@ -111,6 +111,31 @@ const doctorTemplates = {
   ],
 };
 
+doctorTemplates.scheduled = (ctx) => [
+  HEADER,
+  '',
+  `Dear ${ctx.patientName}, this is a reminder for your appointment.`,
+  '',
+  ...patientDetailsBlock(ctx),
+  '',
+  `*Date:* ${ctx.date}`,
+  `*Time:* ${ctx.time}`,
+  '',
+  'Please arrive 10 minutes early.',
+];
+doctorTemplates.no_show = (ctx) => [
+  HEADER,
+  '',
+  `Dear ${ctx.patientName}, we missed you at your appointment.`,
+  '',
+  ...patientDetailsBlock(ctx),
+  '',
+  `*Date:* ${ctx.date}`,
+  `*Time:* ${ctx.time}`,
+  '',
+  'Please contact the clinic to reschedule.',
+];
+
 const patientTemplates = {
   pending: (ctx) => [
     HEADER,
@@ -171,9 +196,11 @@ export const buildWhatsAppUrl = (appointment, patient, doctor, audience = 'clini
   let message;
 
   if (audience === 'doctor') {
-    const template = doctorTemplates[ctx.status] || doctorTemplates.pending;
+    const template = doctorTemplates[ctx.status] || doctorTemplates.scheduled || doctorTemplates.pending;
+    if (!template) return null;
     message = template(ctx).join('\n');
-    recipient = normalizePhone(ctx.patientPhone) || clinicNumber;
+    recipient = normalizePhone(ctx.patientPhone);
+    if (!recipient) return null;
   } else {
     const template = patientTemplates[ctx.status] || patientTemplates.pending;
     message = template(ctx).join('\n');

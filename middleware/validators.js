@@ -56,11 +56,11 @@ export const loginValidation = [
 ];
 
 export const appointmentValidation = [
-  body('doctorId').notEmpty().withMessage('Doctor ID is required'),
+  body('patientId').notEmpty().withMessage('Patient ID is required'),
   body('appointmentDate').isISO8601().withMessage('Valid appointment date is required'),
   body('timeSlot').trim().notEmpty().withMessage('Time slot is required'),
   body('reason').trim().notEmpty().withMessage('Reason for visit is required'),
-  body('patientId').optional().isMongoId().withMessage('Valid patient ID is required'),
+  body('doctorId').optional().isMongoId().withMessage('Valid doctor ID is required'),
 ];
 
 export const ratingValidation = [

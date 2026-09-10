@@ -76,45 +76,11 @@ export const getSetupStatus = async (req, res) => {
 };
 
 export const register = async (req, res) => {
-  try {
-    const { name, email, password, phone, clinicId } = req.body;
-
-    if (req.body.role && req.body.role !== 'patient') {
-      return res.status(403).json({
-        success: false,
-        message: 'Use the dedicated signup pages for staff accounts.',
-      });
-    }
-
-    const existingUser = await User.findOne({ email });
-    if (existingUser) {
-      return res.status(409).json({ success: false, message: 'Email already registered.' });
-    }
-
-    const clinic = await resolveClinic(clinicId);
-    if (!clinic) {
-      return res.status(400).json({ success: false, message: 'No active clinic available.' });
-    }
-
-    const user = await User.create({
-      name,
-      email,
-      password,
-      phone,
-      role: 'patient',
-      clinicId: clinic._id,
-    });
-    const token = generateToken(user._id);
-
-    res.status(201).json({
-      success: true,
-      message: 'Patient registered successfully.',
-      token,
-      user: toAuthUser(user),
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
+  return res.status(410).json({
+    success: false,
+    message:
+      'Patient self-registration is disabled. Please contact the clinic; your doctor will add you as a patient.',
+  });
 };
 
 /** One-time clinic admin bootstrap (separate from doctor accounts). */
@@ -179,19 +145,28 @@ export const registerDoctor = async (req, res) => {
   try {
     const {
       name,
+      firstName,
+      lastName,
       email,
       password,
       phone,
       specialization,
       qualification,
       experience,
+      licenseNumber,
       consultationFee,
+      consultationTypes,
       bio,
+      clinicName,
+      clinicAddress,
+      city,
+      state,
+      country,
+      postalCode,
       clinicId,
       setupKey,
     } = req.body;
 
-    // If setupKey is sent (legacy admin doctor form), validate it when provided
     if (setupKey) {
       if (!assertSetupKey(setupKey, res)) return;
     }
@@ -206,8 +181,19 @@ export const registerDoctor = async (req, res) => {
       return res.status(400).json({ success: false, message: 'No active clinic available for registration.' });
     }
 
+    const displayName =
+      name?.trim() ||
+      [firstName, lastName].filter(Boolean).join(' ').trim() ||
+      '';
+
+    if (!displayName) {
+      return res.status(400).json({ success: false, message: 'Name is required.' });
+    }
+
     const user = await User.create({
-      name,
+      name: displayName,
+      firstName: firstName || '',
+      lastName: lastName || '',
       email,
       password,
       phone,
@@ -216,16 +202,25 @@ export const registerDoctor = async (req, res) => {
       specialization: specialization || 'Ayurvedic Physician',
       qualification: qualification || '',
       experience: experience || 0,
+      licenseNumber: licenseNumber || '',
       consultationFee: consultationFee || 500,
+      consultationTypes: Array.isArray(consultationTypes) ? consultationTypes : [],
       bio: bio || '',
+      clinicName: clinicName || clinic.name || '',
+      clinicAddress: clinicAddress || '',
+      city: city || '',
+      state: state || '',
+      country: country || '',
+      postalCode: postalCode || '',
       isActive: true,
+      approvalStatus: 'pending',
     });
 
     const token = generateToken(user._id);
 
     res.status(201).json({
       success: true,
-      message: 'Doctor account created successfully.',
+      message: 'Doctor account created. Please wait for admin approval before accessing the dashboard.',
       token,
       user: toAuthUser(user),
     });
@@ -234,41 +229,11 @@ export const registerDoctor = async (req, res) => {
   }
 };
 
-export const registerReceptionist = async (req, res) => {
-  try {
-    const { name, email, password, phone, clinicId } = req.body;
-
-    const existingUser = await User.findOne({ email });
-    if (existingUser) {
-      return res.status(409).json({ success: false, message: 'Email already registered.' });
-    }
-
-    const clinic = await resolveClinic(clinicId);
-    if (!clinic) {
-      return res.status(400).json({ success: false, message: 'No active clinic available for registration.' });
-    }
-
-    const user = await User.create({
-      name,
-      email,
-      password,
-      phone,
-      role: 'receptionist',
-      clinicId: clinic._id,
-      isActive: true,
-    });
-
-    const token = generateToken(user._id);
-
-    res.status(201).json({
-      success: true,
-      message: 'Receptionist account created successfully.',
-      token,
-      user: toAuthUser(user),
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
+export const registerReceptionist = async (_req, res) => {
+  return res.status(410).json({
+    success: false,
+    message: 'Receptionist registration is disabled in this product.',
+  });
 };
 
 export const login = async (req, res) => {
@@ -280,17 +245,42 @@ export const login = async (req, res) => {
       return res.status(401).json({ success: false, message: 'Invalid email or password.' });
     }
 
-    if (role && user.role !== role) {
-      return res.status(401).json({
+    if (user.role === 'patient' || user.role === 'receptionist') {
+      return res.status(403).json({
         success: false,
-        message: `This account is registered as a ${user.role}, not a ${role}.`,
+        message:
+          'Patient and staff self-service login is disabled. Doctors manage patient records directly.',
       });
     }
 
-    if (user.isActive === false) {
+    if (role && user.role !== role) {
+      // Allow clinic_admin to login via admin form when role=clinic_admin
+      if (!(role === 'clinic_admin' && user.role === 'super_admin')) {
+        return res.status(401).json({
+          success: false,
+          message: `This account is registered as a ${user.role}, not a ${role}.`,
+        });
+      }
+    }
+
+    if (user.role === 'doctor' && user.approvalStatus === 'suspended') {
+      return res.status(403).json({
+        success: false,
+        message: 'Your doctor account is suspended. Contact the clinic admin.',
+      });
+    }
+
+    if (user.isActive === false && user.approvalStatus !== 'pending') {
       return res.status(403).json({
         success: false,
         message: 'Your account has been deactivated. Contact your clinic admin.',
+      });
+    }
+
+    if (user.role === 'doctor' && user.approvalStatus === 'rejected') {
+      return res.status(403).json({
+        success: false,
+        message: 'Your doctor account was not approved. Contact the clinic admin.',
       });
     }
 
@@ -298,6 +288,9 @@ export const login = async (req, res) => {
     if (!isMatch) {
       return res.status(401).json({ success: false, message: 'Invalid email or password.' });
     }
+
+    user.lastActiveAt = new Date();
+    await user.save({ validateBeforeSave: false });
 
     const token = generateToken(user._id);
 
@@ -320,14 +313,25 @@ export const updateProfile = async (req, res) => {
   try {
     const allowedFields = [
       'name',
+      'firstName',
+      'lastName',
       'phone',
       'specialization',
       'qualification',
       'experience',
+      'licenseNumber',
       'consultationFee',
+      'consultationTypes',
       'bio',
+      'clinicName',
+      'clinicAddress',
+      'city',
+      'state',
+      'country',
+      'postalCode',
       'availableDays',
       'availableSlots',
+      'practiceSettings',
     ];
 
     const updates = {};
@@ -336,7 +340,7 @@ export const updateProfile = async (req, res) => {
 
       let value = req.body[field];
 
-      if (field === 'availableDays' || field === 'availableSlots') {
+      if (field === 'availableDays' || field === 'availableSlots' || field === 'consultationTypes') {
         if (Array.isArray(value)) {
           updates[field] = value;
           continue;
@@ -346,6 +350,16 @@ export const updateProfile = async (req, res) => {
         } catch {
           continue;
         }
+      } else if (field === 'practiceSettings') {
+        if (typeof value === 'string') {
+          try {
+            value = JSON.parse(value);
+          } catch {
+            continue;
+          }
+        }
+        updates[field] = value;
+        continue;
       } else if (field === 'experience' || field === 'consultationFee') {
         value = Number(value);
       }

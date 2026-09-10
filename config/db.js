@@ -2,6 +2,7 @@ import dns from 'dns';
 import mongoose from 'mongoose';
 import Appointment from '../models/Appointment.js';
 import { migrateClinicTenancy } from '../utils/migrateClinic.js';
+import { migrateDoctorApprovals } from '../utils/migrateApprovals.js';
 
 export const migrateAppointmentIndexes = async () => {
   try {
@@ -35,11 +36,15 @@ export const cleanupOrphanAppointments = async () => {
       const doctor = appt.doctor
         ? await db.collection('users').findOne({ _id: appt.doctor })
         : null;
-      const patient = appt.patient
-        ? await db.collection('users').findOne({ _id: appt.patient })
-        : null;
 
-      if (!doctor || !patient) {
+      let hasPatient = false;
+      if (appt.patientId) {
+        hasPatient = Boolean(await db.collection('patients').findOne({ _id: appt.patientId }));
+      } else if (appt.patient) {
+        hasPatient = Boolean(await db.collection('users').findOne({ _id: appt.patient }));
+      }
+
+      if (!doctor || !hasPatient) {
         await db.collection('appointments').deleteOne({ _id: appt._id });
         removed += 1;
       }
@@ -62,6 +67,7 @@ const connectDB = async () => {
     });
     console.log(`MongoDB connected: ${conn.connection.host}`);
     await migrateClinicTenancy();
+    await migrateDoctorApprovals();
     await migrateAppointmentIndexes();
     await cleanupOrphanAppointments();
   } catch (error) {

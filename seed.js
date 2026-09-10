@@ -40,6 +40,10 @@ const userSchema = new mongoose.Schema({
 
   isActive: Boolean,
 
+  approvalStatus: String,
+
+  clinicName: String,
+
 });
 
 
@@ -92,6 +96,10 @@ const seedDoctor = {
 
   availableSlots: ['09:00', '10:00', '11:00', '14:00', '15:00', '16:00', '17:00', '18:00', '19:00', '20:00', '21:00'],
 
+  clinicName: 'Shreeshakti Ayurveda',
+
+  approvalStatus: 'approved',
+
 };
 
 
@@ -136,7 +144,7 @@ async function seed() {
 
   const hashed = await bcrypt.hash(seedDoctor.password, 12);
 
-  await User.create({ ...seedDoctor, password: hashed, isActive: true });
+  await User.create({ ...seedDoctor, password: hashed, isActive: true, approvalStatus: 'approved' });
 
 
 

@@ -1,12 +1,13 @@
 {
   "name": "shreeshakti-backend",
   "version": "1.0.0",
-  "description": "Doctor-Patient Appointment Booking API",
+  "description": "Doctor-centric clinic practice management API",
   "main": "server.js",
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "test": "node --test tests/*.test.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

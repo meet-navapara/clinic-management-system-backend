@@ -1,16 +1,15 @@
 import { Router } from 'express';
-import {
-  createRating,
-  getMyRatingForDoctor,
-  getDoctorRatings,
-} from '../controllers/ratingController.js';
-import { protect, authorize } from '../middleware/auth.js';
-import { ratingValidation } from '../middleware/validators.js';
 
 const router = Router();
 
-router.get('/doctor/:doctorId', getDoctorRatings);
-router.get('/mine/:doctorId', protect, authorize('patient'), getMyRatingForDoctor);
-router.post('/', protect, authorize('patient'), ratingValidation, createRating);
+const gone = (_req, res) =>
+  res.status(410).json({
+    success: false,
+    message: 'Patient ratings are disabled. This product no longer supports patient accounts.',
+  });
+
+router.get('/doctor/:doctorId', gone);
+router.get('/mine/:doctorId', gone);
+router.post('/', gone);
 
 export default router;
