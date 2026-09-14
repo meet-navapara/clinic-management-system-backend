@@ -7,6 +7,7 @@ import {
   markAllInboxRead,
 } from '../controllers/notificationController.js';
 import { protect, authorize, requireApprovedDoctor } from '../middleware/auth.js';
+import { attachBranchContext } from '../middleware/access.js';
 
 const router = Router();
 
@@ -16,10 +17,10 @@ router.get('/inbox', authorize('doctor'), requireApprovedDoctor, listDoctorInbox
 router.patch('/inbox/read-all', authorize('doctor'), requireApprovedDoctor, markAllInboxRead);
 router.patch('/inbox/:id/read', authorize('doctor'), requireApprovedDoctor, markInboxRead);
 
-router.get('/', authorize('doctor', 'clinic_admin', 'super_admin'), listMyNotifications);
+router.get('/', authorize('doctor'), requireApprovedDoctor, attachBranchContext, listMyNotifications);
 router.post(
   '/process-due',
-  authorize('doctor', 'clinic_admin', 'super_admin'),
+  authorize('doctor'),
   runReminderPass
 );
 

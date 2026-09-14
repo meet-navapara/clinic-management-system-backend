@@ -25,7 +25,7 @@ export const protect = async (req, res, next) => {
       if (!isStatusCheck) {
         return res.status(403).json({
           success: false,
-          message: 'Your account has been deactivated. Contact your clinic admin.',
+          message: 'Your account has been deactivated. Contact Super Admin.',
         });
       }
     }
@@ -80,10 +80,9 @@ export const requireClinic = (req, res, next) => {
   next();
 };
 
-/** True if resource belongs to the user's clinic (super_admin bypasses). */
+/** True if resource belongs to the user's clinic. Super Admin has no clinic bypass. */
 export const isSameClinic = (user, resourceClinicId) => {
   if (!user) return false;
-  if (user.role === 'super_admin') return true;
   if (!resourceClinicId || !user.clinicId) return false;
   return String(resourceClinicId) === String(user.clinicId);
 };
@@ -91,7 +90,6 @@ export const isSameClinic = (user, resourceClinicId) => {
 /** Mongo filter for clinic-scoped queries. */
 export const clinicScopeFilter = (user) => {
   if (!user) return {};
-  if (user.role === 'super_admin') return {};
   if (!user.clinicId) return { clinicId: null };
   return { clinicId: user.clinicId };
 };

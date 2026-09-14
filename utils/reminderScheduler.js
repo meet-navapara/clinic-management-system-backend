@@ -17,7 +17,6 @@ export const startReminderScheduler = () => {
     }
   };
 
-  // Initial delay so DB is ready
   setTimeout(tick, 5000);
   setInterval(tick, INTERVAL_MS);
   console.log('Appointment reminder scheduler started (every 60s).');

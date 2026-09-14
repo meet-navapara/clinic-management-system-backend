@@ -5,13 +5,18 @@ import {
   getDoctorAvailability,
   getSpecializations,
 } from '../controllers/doctorController.js';
-import { protect, authorize } from '../middleware/auth.js';
+import { protect } from '../middleware/auth.js';
+import { requireClinicUser, requirePermission } from '../middleware/access.js';
+import { P } from '../utils/permissions.js';
 
 const router = Router();
 
 /** Practice-management only — no public doctor marketplace. */
 router.use(protect);
-router.use(authorize('doctor', 'clinic_admin', 'super_admin'));
+router.use(
+  requireClinicUser,
+  requirePermission(P.PATIENTS_VIEW, P.PATIENTS_MANAGE, P.APPOINTMENTS_VIEW, P.APPOINTMENTS_MANAGE)
+);
 
 router.get('/', getDoctors);
 router.get('/specializations', getSpecializations);

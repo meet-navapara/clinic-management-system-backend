@@ -1,10 +1,12 @@
-import { validationResult } from 'express-validator';
 import Appointment from '../models/Appointment.js';
 import User from '../models/User.js';
 import Patient from '../models/Patient.js';
 import NotificationLog from '../models/NotificationLog.js';
 import { buildWhatsAppUrl } from '../utils/whatsapp.js';
 import { isSameClinic } from '../middleware/auth.js';
+import { hasPermission, P } from '../utils/permissions.js';
+import { tenantFilter, assertBranchAccess, resolveWriteBranchId, canAccessBranch } from '../utils/branchScope.js';
+import { parsePagination, paginated } from '../utils/pagination.js';
 import {
   scheduleAppointmentReminder,
   cancelAppointmentReminders,
@@ -17,14 +19,6 @@ import {
 import { recordPatientEvent } from '../utils/patientTimeline.js';
 import { notifyDoctor } from '../utils/doctorNotify.js';
 import { ACTIVE_APPOINTMENT_STATUSES } from '../models/Appointment.js';
-
-const ADMIN_ROLES = ['clinic_admin', 'super_admin'];
-
-const refId = (value) => {
-  if (!value) return '';
-  if (typeof value === 'object') return String(value._id || value.id || '');
-  return String(value);
-};
 
 const isCastError = (error) => error?.name === 'CastError' || error?.kind === 'ObjectId';
 
@@ -78,21 +72,14 @@ const assertSlotAvailable = async ({ doctor, doctorId, date, timeSlot, excludeId
 };
 
 const assertCanManageAppointment = (req, appointment) => {
-  const isDoctor =
-    req.user.role === 'doctor' && refId(appointment.doctor) === String(req.user._id);
-  const isAdmin =
-    ADMIN_ROLES.includes(req.user.role) &&
-    (req.user.role === 'super_admin' || isSameClinic(req.user, appointment.clinicId));
-  return isDoctor || isAdmin;
+  if (!isSameClinic(req.user, appointment.clinicId)) return false;
+  if (!canAccessBranch(req.user, appointment.branchId)) return false;
+  if (req.user.role === 'doctor') return true;
+  return hasPermission(req.user, P.APPOINTMENTS_VIEW) || hasPermission(req.user, P.APPOINTMENTS_MANAGE);
 };
 
 export const createAppointment = async (req, res) => {
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ success: false, errors: errors.array() });
-    }
-
     const {
       doctorId,
       appointmentDate,
@@ -106,12 +93,10 @@ export const createAppointment = async (req, res) => {
     } = req.body;
 
     const isDoctor = req.user.role === 'doctor';
-    const isAdmin = ADMIN_ROLES.includes(req.user.role);
-
-    if (!isDoctor && !isAdmin) {
+    if (!isDoctor && !hasPermission(req.user, P.APPOINTMENTS_MANAGE)) {
       return res.status(403).json({
         success: false,
-        message: 'Appointments are created by the doctor.',
+        message: 'Appointments are created by clinic staff.',
       });
     }
 
@@ -132,6 +117,14 @@ export const createAppointment = async (req, res) => {
     const patientRecord = await Patient.findOne({ _id: patientId, isActive: true });
     if (!patientRecord) {
       return res.status(404).json({ success: false, message: 'Patient not found.' });
+    }
+    if (!isSameClinic(req.user, patientRecord.clinicId)) {
+      return res.status(403).json({ success: false, message: 'Patient belongs to another clinic.' });
+    }
+    try {
+      assertBranchAccess(req.user, patientRecord.branchId);
+    } catch (err) {
+      return res.status(err.status || 403).json({ success: false, message: err.message });
     }
 
     let doctor;
@@ -154,7 +147,7 @@ export const createAppointment = async (req, res) => {
       if (!doctor) {
         return res.status(404).json({ success: false, message: 'Doctor not found or not approved.' });
       }
-      if (req.user.role !== 'super_admin' && !isSameClinic(req.user, doctor.clinicId)) {
+      if (!isSameClinic(req.user, doctor.clinicId)) {
         return res.status(403).json({
           success: false,
           message: 'Cannot book with a doctor outside your clinic.',
@@ -183,8 +176,19 @@ export const createAppointment = async (req, res) => {
         ? requestedStatus
         : 'scheduled';
 
+    let branchId;
+    try {
+      branchId = await resolveWriteBranchId(
+        req.user,
+        patientRecord.branchId || req.branchId
+      );
+    } catch (err) {
+      return res.status(err.status || 400).json({ success: false, message: err.message });
+    }
+
     const appointment = await Appointment.create({
       clinicId: doctor.clinicId || patientRecord.clinicId || null,
+      branchId,
       patientId: patientRecord._id,
       patient: null,
       doctor: doctor._id,
@@ -258,17 +262,16 @@ export const createAppointment = async (req, res) => {
 export const getMyAppointments = async (req, res) => {
   try {
     const { status, date, from, to, patientId, appointmentType } = req.query;
-    let filter = {};
-
-    if (req.user.role === 'doctor') {
-      filter = { doctor: req.user._id };
-    } else if (ADMIN_ROLES.includes(req.user.role)) {
-      filter = req.user.role === 'super_admin' ? {} : { clinicId: req.user.clinicId };
-    } else {
+    if (req.user.role !== 'doctor' && !hasPermission(req.user, P.APPOINTMENTS_VIEW)) {
       return res.status(403).json({
         success: false,
-        message: 'Patient self-service appointments are disabled.',
+        message: 'Not authorized to list appointments.',
       });
+    }
+
+    const filter = { ...tenantFilter(req.user, req.branchId) };
+    if (req.user.role === 'doctor' && req.query.mine === '1') {
+      filter.doctor = req.user._id;
     }
 
     if (patientId) filter.patientId = patientId;
@@ -302,13 +305,31 @@ export const getMyAppointments = async (req, res) => {
       filter.appointmentDate = { $gte: startOfDay, $lte: endOfDay };
     }
 
-    const appointments = await Appointment.find(filter)
-      .populate(APPT_POPULATE)
-      .sort({ appointmentDate: 1, timeSlot: 1 });
+    const hasRange = Boolean(from || to || date);
+    const { page, limit, skip } = parsePagination(req.query, {
+      page: 1,
+      limit: hasRange ? 500 : 20,
+      max: hasRange ? 1000 : 100,
+    });
 
-    res.json({ success: true, count: appointments.length, appointments });
+    const [appointments, total] = await Promise.all([
+      Appointment.find(filter)
+        .populate(APPT_POPULATE)
+        .sort({ appointmentDate: 1, timeSlot: 1 })
+        .skip(skip)
+        .limit(limit),
+      Appointment.countDocuments(filter),
+    ]);
+
+    res.json({
+      success: true,
+      ...paginated({ items: appointments, total, page, limit }),
+      count: appointments.length,
+      appointments,
+    });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    console.error(error);
+    res.status(500).json({ success: false, message: 'Something went wrong. Please try again.' });
   }
 };
 
@@ -338,7 +359,7 @@ export const getAppointmentById = async (req, res) => {
 
 export const findClinicPatient = async (req, res) => {
   try {
-    if (req.user.role !== 'doctor' && !ADMIN_ROLES.includes(req.user.role)) {
+    if (req.user.role !== 'doctor' && !hasPermission(req.user, P.PATIENTS_VIEW)) {
       return res.status(403).json({ success: false, message: 'Not authorized.' });
     }
 
@@ -350,12 +371,8 @@ export const findClinicPatient = async (req, res) => {
       });
     }
 
-    const filter = { isActive: true };
-    if (req.user.role === 'doctor') {
-      filter.doctorId = req.user._id;
-    } else if (req.user.role !== 'super_admin') {
-      filter.clinicId = req.user.clinicId;
-    }
+    const filter = { isActive: true, ...tenantFilter(req.user, req.branchId) };
+    if (req.query.mine === '1') filter.doctorId = req.user._id;
 
     const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     filter.$or = [
@@ -561,6 +578,8 @@ export const getDoctorDashboardStats = async (req, res) => {
     }
 
     const doctorId = req.user._id;
+    const branchScope = tenantFilter(req.user, req.branchId);
+
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
     const todayEnd = new Date();
@@ -571,13 +590,15 @@ export const getDoctorDashboardStats = async (req, res) => {
 
     const [todayAppts, allAppts, totalPatients, newPatients, upcoming] = await Promise.all([
       Appointment.find({
+        ...branchScope,
         doctor: doctorId,
         appointmentDate: { $gte: todayStart, $lte: todayEnd },
       }).populate(APPT_POPULATE),
-      Appointment.find({ doctor: doctorId }).select('status patientId appointmentDate'),
-      Patient.countDocuments({ doctorId, isActive: true }),
-      Patient.countDocuments({ doctorId, isActive: true, createdAt: { $gte: weekAgo } }),
+      Appointment.find({ ...branchScope, doctor: doctorId }).select('status patientId appointmentDate'),
+      Patient.countDocuments({ ...branchScope, doctorId, isActive: true }),
+      Patient.countDocuments({ ...branchScope, doctorId, isActive: true, createdAt: { $gte: weekAgo } }),
       Appointment.find({
+        ...branchScope,
         doctor: doctorId,
         status: { $in: ACTIVE_APPOINTMENT_STATUSES },
         appointmentDate: { $gte: todayStart },
@@ -598,10 +619,33 @@ export const getDoctorDashboardStats = async (req, res) => {
     }
     const returningPatients = Object.values(patientVisitCounts).filter((c) => c > 1).length;
 
-    const recentPatients = await Patient.find({ doctorId, isActive: true })
+    const recentPatients = await Patient.find({ ...branchScope, doctorId, isActive: true })
       .sort({ createdAt: -1 })
       .limit(5)
       .select('name patientCode phone createdAt gender age');
+
+    const Invoice = (await import('../models/Invoice.js')).default;
+    const QueueTicket = (await import('../models/QueueTicket.js')).default;
+    const Prescription = (await import('../models/Prescription.js')).default;
+
+    const todayQueueDate = new Date();
+    todayQueueDate.setHours(0, 0, 0, 0);
+    const [ownRevenue, waitingQueue, rxCount] = await Promise.all([
+      Invoice.aggregate([
+        { $match: { ...branchScope, doctorId, paymentStatus: { $ne: 'cancelled' } } },
+        { $group: { _id: null, paid: { $sum: '$paidAmount' }, billed: { $sum: '$total' }, due: { $sum: '$dueAmount' } } },
+      ]),
+      QueueTicket.find({
+        ...branchScope,
+        doctorId,
+        queueDate: todayQueueDate,
+        status: { $in: ['waiting', 'called', 'in_consultation'] },
+      })
+        .sort({ tokenNumber: 1 })
+        .limit(8)
+        .populate('patientId', 'name patientCode'),
+      Prescription.countDocuments({ ...branchScope, doctorId }),
+    ]);
 
     res.json({
       success: true,
@@ -629,6 +673,13 @@ export const getDoctorDashboardStats = async (req, res) => {
           noShow: countByStatus(allAppts, 'no_show'),
           next: upcoming,
         },
+        revenue: {
+          paid: ownRevenue[0]?.paid || 0,
+          billed: ownRevenue[0]?.billed || 0,
+          due: ownRevenue[0]?.due || 0,
+        },
+        queue: waitingQueue,
+        prescriptions: { total: rxCount },
       },
     });
   } catch (error) {

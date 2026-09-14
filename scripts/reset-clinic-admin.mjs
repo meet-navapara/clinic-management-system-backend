@@ -1,27 +1,9 @@
-import dotenv from 'dotenv';
-import mongoose from 'mongoose';
-import bcrypt from 'bcryptjs';
-
-dotenv.config();
-
-await mongoose.connect(process.env.MONGODB_URI);
-const hash = await bcrypt.hash('admin123', 12);
-
-await mongoose.connection.db.collection('users').updateOne(
-  { role: 'clinic_admin' },
-  {
-    $set: {
-      email: 'admin@shreeshakti.com',
-      name: 'Clinic Admin',
-      password: hash,
-      isActive: true,
-    },
-  }
+/**
+ * Legacy helper. Clinic Admin is no longer an authentication role.
+ * Super Admin is created once at /admin/register with ADMIN_SETUP_SECRET.
+ * Doctors are clinic administrators.
+ */
+console.log(
+  'This script is retired. Create Super Admin at /admin/register. Doctors manage their own clinics.'
 );
-
-const check = await mongoose.connection.db
-  .collection('users')
-  .findOne({ role: 'clinic_admin' }, { projection: { email: 1, name: 1, role: 1 } });
-
-console.log('Clinic admin ready:', JSON.stringify(check));
-await mongoose.disconnect();
+process.exit(0);

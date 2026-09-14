@@ -19,25 +19,34 @@ import {
   loginValidation,
   handleValidation,
 } from '../middleware/validators.js';
+import { authLimiter, loginLimiter } from '../middleware/rateLimit.js';
 
 const router = Router();
 
 router.get('/setup-status', getSetupStatus);
-router.post('/register', registerValidation, handleValidation, register);
+router.post('/register', authLimiter, registerValidation, handleValidation, register);
 router.post(
   '/register/clinic-admin',
+  authLimiter,
   clinicAdminRegisterValidation,
   handleValidation,
   registerClinicAdmin
 );
-router.post('/register/doctor', doctorRegisterValidation, handleValidation, registerDoctor);
+router.post(
+  '/register/doctor',
+  authLimiter,
+  doctorRegisterValidation,
+  handleValidation,
+  registerDoctor
+);
 router.post(
   '/register/receptionist',
+  authLimiter,
   receptionistRegisterValidation,
   handleValidation,
   registerReceptionist
 );
-router.post('/login', loginValidation, handleValidation, login);
+router.post('/login', loginLimiter, loginValidation, handleValidation, login);
 router.get('/me', protect, getMe);
 router.put('/profile', protect, (req, res, next) => {
   uploadProfilePhoto(req, res, (err) => {

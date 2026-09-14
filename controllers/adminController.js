@@ -18,43 +18,18 @@ const doctorFilter = (req) => {
 export const getAdminDashboard = async (req, res) => {
   try {
     const base = doctorFilter(req);
-    const patientFilter =
-      req.user.role === 'super_admin' ? { isActive: true } : { clinicId: req.user.clinicId, isActive: true };
-    const apptFilter =
-      req.user.role === 'super_admin' ? {} : { clinicId: req.user.clinicId };
-
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-    const todayEnd = new Date(todayStart);
-    todayEnd.setDate(todayEnd.getDate() + 1);
-
     const [
       totalDoctors,
       pendingDoctors,
       approvedDoctors,
       suspendedDoctors,
       rejectedDoctors,
-      totalPatients,
-      totalAppointments,
-      upcomingAppointments,
-      todayAppointments,
     ] = await Promise.all([
       User.countDocuments(base),
       User.countDocuments({ ...base, approvalStatus: 'pending' }),
       User.countDocuments({ ...base, approvalStatus: 'approved' }),
       User.countDocuments({ ...base, approvalStatus: 'suspended' }),
       User.countDocuments({ ...base, approvalStatus: 'rejected' }),
-      Patient.countDocuments(patientFilter),
-      Appointment.countDocuments(apptFilter),
-      Appointment.countDocuments({
-        ...apptFilter,
-        status: { $in: ACTIVE_APPOINTMENT_STATUSES },
-        appointmentDate: { $gte: todayStart },
-      }),
-      Appointment.countDocuments({
-        ...apptFilter,
-        appointmentDate: { $gte: todayStart, $lt: todayEnd },
-      }),
     ]);
 
     res.json({
@@ -66,12 +41,6 @@ export const getAdminDashboard = async (req, res) => {
           approved: approvedDoctors,
           suspended: suspendedDoctors,
           rejected: rejectedDoctors,
-        },
-        patients: { total: totalPatients },
-        appointments: {
-          total: totalAppointments,
-          upcoming: upcomingAppointments,
-          today: todayAppointments,
         },
       },
     });

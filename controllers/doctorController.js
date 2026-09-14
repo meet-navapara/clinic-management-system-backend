@@ -4,10 +4,8 @@ import { ACTIVE_APPOINTMENT_STATUSES } from '../models/Appointment.js';
 
 const clinicScopedFilter = (req, base = {}) => {
   const filter = { ...base };
-  if (req.user.role === 'doctor' || req.user.role === 'clinic_admin') {
-    if (req.user.clinicId) filter.clinicId = req.user.clinicId;
-  } else if (req.query.clinicId) {
-    filter.clinicId = req.query.clinicId;
+  if (req.user.clinicId) {
+    filter.clinicId = req.user.clinicId;
   }
   return filter;
 };

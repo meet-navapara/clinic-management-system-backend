@@ -1,16 +1,28 @@
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 
-/** Auth roles. `patient` / `receptionist` retained only for legacy DB rows — login is blocked. */
+/**
+ * Stored User.role values.
+ * Authentication platform roles are `super_admin` and `doctor`.
+ * Clinic staff records may sign in only when `loginEnabled` is true.
+ * Legacy staff role values remain so existing documents load.
+ * `patient` is retained for legacy DB rows — patient login stays blocked.
+ */
 export const USER_ROLES = [
   'super_admin',
   'clinic_admin',
+  'clinic_manager',
   'doctor',
   'receptionist',
+  'nurse',
+  'assistant',
   'patient',
 ];
 
-export const ADMIN_ROLES = ['clinic_admin', 'super_admin'];
+export const STAFF_TYPES = ['receptionist', 'nurse', 'assistant', 'accountant', 'other'];
+
+/** Clinic operators (doctors) may access every branch in their clinic. */
+export const ADMIN_ROLES = ['doctor'];
 
 export const APPROVAL_STATUSES = ['pending', 'approved', 'rejected', 'suspended'];
 
@@ -76,6 +88,37 @@ const userSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Clinic',
       default: null,
+      index: true,
+    },
+    branchIds: {
+      type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Branch' }],
+      default: [],
+    },
+    defaultBranchId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Branch',
+      default: null,
+    },
+    permissions: { type: [String], default: [] },
+    /** Job type for clinic staff records. Not an authentication role. */
+    staffType: {
+      type: String,
+      enum: [...STAFF_TYPES, ''],
+      default: '',
+      index: true,
+    },
+    customRoleName: { type: String, default: '', trim: true },
+    joiningDate: { type: Date, default: null },
+    staffStatus: {
+      type: String,
+      enum: ['active', 'inactive', 'suspended'],
+      default: 'active',
+      index: true,
+    },
+    /** Clinic staff may sign in only when a Doctor enables this. Doctors/Super Admin ignore it. */
+    loginEnabled: {
+      type: Boolean,
+      default: false,
       index: true,
     },
     approvalStatus: {

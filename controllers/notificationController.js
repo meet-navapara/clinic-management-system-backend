@@ -1,7 +1,7 @@
 import NotificationLog from '../models/NotificationLog.js';
 import DoctorNotification from '../models/DoctorNotification.js';
 import { processDueReminders } from '../utils/notificationService.js';
-import { getUnreadCount } from '../utils/doctorNotify.js';
+import { tenantFilter } from '../utils/branchScope.js';
 
 /** Patient reminder delivery logs (not the doctor inbox). */
 export const listMyNotifications = async (req, res) => {
@@ -10,12 +10,11 @@ export const listMyNotifications = async (req, res) => {
 
     if (req.user.role === 'doctor') {
       const Appointment = (await import('../models/Appointment.js')).default;
-      const apptIds = await Appointment.find({ doctor: req.user._id }).distinct('_id');
+      const apptIds = await Appointment.find({
+        doctor: req.user._id,
+        ...tenantFilter(req.user, req.branchId),
+      }).distinct('_id');
       filter.appointmentId = { $in: apptIds };
-    } else if (['clinic_admin', 'super_admin'].includes(req.user.role)) {
-      if (req.user.role !== 'super_admin') {
-        filter.clinicId = req.user.clinicId;
-      }
     } else {
       return res.status(403).json({ success: false, message: 'Not authorized.' });
     }
@@ -42,7 +41,7 @@ export const listMyNotifications = async (req, res) => {
 
 export const runReminderPass = async (req, res) => {
   try {
-    if (!['clinic_admin', 'super_admin', 'doctor'].includes(req.user.role)) {
+    if (!['doctor'].includes(req.user.role)) {
       return res.status(403).json({ success: false, message: 'Not authorized.' });
     }
     const processed = await processDueReminders();

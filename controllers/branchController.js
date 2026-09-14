@@ -1,0 +1,112 @@
+import Branch from '../models/Branch.js';
+import User from '../models/User.js';
+import { asyncHandler } from '../middleware/access.js';
+import { clinicQuery, canAccessBranch, assertSameClinic } from '../utils/branchScope.js';
+import { writeAudit, AUDIT } from '../utils/audit.js';
+import { ADMIN_ROLES } from '../utils/permissions.js';
+
+export const listBranches = asyncHandler(async (req, res) => {
+  const filter = { ...clinicQuery(req.user) };
+  if (req.query.active !== 'all') {
+    if (req.query.active === 'false') filter.isActive = false;
+    else filter.isActive = true;
+  }
+  const branches = await Branch.find(filter).sort({ isDefault: -1, name: 1 }).populate('managerId', 'name email');
+  const visible = ADMIN_ROLES.includes(req.user.role)
+    ? branches
+    : branches.filter((b) => canAccessBranch(req.user, b._id));
+  res.json({ success: true, branches: visible });
+});
+
+export const getBranch = asyncHandler(async (req, res) => {
+  const branch = await Branch.findById(req.params.id).populate('managerId', 'name email phone');
+  if (!branch) return res.status(404).json({ success: false, message: 'Branch not found.' });
+  assertSameClinic(req.user, branch.clinicId);
+  if (!canAccessBranch(req.user, branch._id)) {
+    return res.status(403).json({ success: false, message: 'You do not have access to this branch.' });
+  }
+  res.json({ success: true, branch });
+});
+
+export const createBranch = asyncHandler(async (req, res) => {
+  const clinicId = req.user.clinicId;
+  if (!clinicId) {
+    return res.status(400).json({ success: false, message: 'No clinic on this account.' });
+  }
+  const exists = await Branch.countDocuments({ clinicId });
+  const branch = await Branch.create({
+    clinicId,
+    name: req.body.name,
+    code: req.body.code || '',
+    address: req.body.address || '',
+    phone: req.body.phone || '',
+    email: req.body.email || '',
+    managerId: req.body.managerId || null,
+    workingHours: req.body.workingHours || undefined,
+    appointmentDuration: req.body.appointmentDuration || 30,
+    logo: req.body.logo || '',
+    displayTitle: req.body.displayTitle || '',
+    roomLabel: req.body.roomLabel || 'Room 1',
+    tokenPrefix: req.body.tokenPrefix || '',
+    isDefault: exists === 0,
+    isActive: true,
+  });
+  await writeAudit({
+    clinicId,
+    branchId: branch._id,
+    actorId: req.user._id,
+    action: AUDIT.BRANCH_CREATED,
+    entityType: 'Branch',
+    entityId: branch._id,
+    detail: branch.name,
+  });
+  res.status(201).json({ success: true, branch });
+});
+
+export const updateBranch = asyncHandler(async (req, res) => {
+  const branch = await Branch.findById(req.params.id);
+  if (!branch) return res.status(404).json({ success: false, message: 'Branch not found.' });
+  assertSameClinic(req.user, branch.clinicId);
+  const fields = [
+    'name',
+    'code',
+    'address',
+    'phone',
+    'email',
+    'managerId',
+    'workingHours',
+    'appointmentDuration',
+    'logo',
+    'displayTitle',
+    'roomLabel',
+    'tokenPrefix',
+    'isActive',
+  ];
+  for (const field of fields) {
+    if (req.body[field] !== undefined) branch[field] = req.body[field];
+  }
+  if (req.body.isDefault === true) {
+    await Branch.updateMany({ clinicId: branch.clinicId, _id: { $ne: branch._id } }, { $set: { isDefault: false } });
+    branch.isDefault = true;
+  }
+  await branch.save();
+  res.json({ success: true, branch });
+});
+
+export const assignStaffToBranch = asyncHandler(async (req, res) => {
+  const branch = await Branch.findById(req.params.id);
+  if (!branch) return res.status(404).json({ success: false, message: 'Branch not found.' });
+  assertSameClinic(req.user, branch.clinicId);
+  if (branch.isActive === false) {
+    return res.status(400).json({ success: false, message: 'Cannot assign staff to a disabled branch.' });
+  }
+  const { userIds = [], doctorIds = [] } = req.body;
+  const ids = [...new Set([...userIds, ...doctorIds].map(String))];
+  await User.updateMany(
+    { _id: { $in: ids }, clinicId: branch.clinicId, role: { $ne: 'super_admin' } },
+    {
+      $set: { branchIds: [branch._id], defaultBranchId: branch._id },
+    }
+  );
+  res.json({ success: true, message: 'Staff assigned to branch.' });
+});

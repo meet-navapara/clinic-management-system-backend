@@ -7,12 +7,25 @@ import { recordPatientEvent } from '../utils/patientTimeline.js';
 import { notifyDoctor } from '../utils/doctorNotify.js';
 import { ACTIVE_APPOINTMENT_STATUSES } from '../models/Appointment.js';
 import { normalizeStatus } from '../utils/appointmentTransitions.js';
+import { hasPermission, P } from '../utils/permissions.js';
+import { tenantFilter, assertBranchAccess, resolveWriteBranchId } from '../utils/branchScope.js';
+import User from '../models/User.js';
+import { escapeRegex, parsePagination } from '../utils/pagination.js';
+import {
+  normalizeIndianMobile,
+  normalizeEmail,
+  phoneMatchVariants,
+} from '../utils/normalizeContact.js';
+import { writeAudit, AUDIT } from '../utils/audit.js';
 
-const escapeRegex = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const safeClientError = (error, fallback = 'Something went wrong. Please try again.') => {
+  if (error?.status && error.status < 500 && error.message) return error.message;
+  return fallback;
+};
 
-const buildDisplayName = ({ firstName, lastName, preferredName, name }) => {
+const buildDisplayName = ({ firstName, middleName, lastName, preferredName, name }) => {
   if (name?.trim()) return name.trim();
-  const parts = [firstName, lastName].filter((p) => p?.trim());
+  const parts = [firstName, middleName, lastName].filter((p) => p?.trim());
   if (parts.length) return parts.join(' ').trim();
   return preferredName?.trim() || '';
 };
@@ -30,8 +43,15 @@ const normalizeList = (value) => {
   return [];
 };
 
-const assertDoctorOwnsPatient = (req, patient) => {
-  if (req.user.role === 'doctor' && String(patient.doctorId) !== String(req.user._id)) {
+const assertClinicPatient = (req, patient) => {
+  if (!req.user?.clinicId || String(patient.clinicId) !== String(req.user.clinicId)) {
+    const err = new Error('Patient not found.');
+    err.status = 404;
+    throw err;
+  }
+  try {
+    assertBranchAccess(req.user, patient.branchId);
+  } catch {
     const err = new Error('Patient not found.');
     err.status = 404;
     throw err;
@@ -53,7 +73,7 @@ const attachVisitSummary = async (patients, doctorId) => {
   const now = new Date();
   const appts = await Appointment.find({
     patientId: { $in: ids },
-    doctor: doctorId,
+    ...(doctorId ? { doctor: doctorId } : {}),
   })
     .select('patientId appointmentDate timeSlot status')
     .sort({ appointmentDate: -1 })
@@ -86,43 +106,73 @@ const attachVisitSummary = async (patients, doctorId) => {
 
 export const createPatient = async (req, res) => {
   try {
-    if (req.user.role !== 'doctor') {
-      return res.status(403).json({ success: false, message: 'Only doctors can add patients.' });
+    if (!hasPermission(req.user, P.PATIENTS_MANAGE)) {
+      return res.status(403).json({ success: false, message: 'Not authorized to add patients.' });
     }
-    if (req.user.approvalStatus !== 'approved') {
+    if (req.user.role === 'doctor' && req.user.approvalStatus !== 'approved') {
       return res.status(403).json({
         success: false,
         message: 'Your account is awaiting admin approval.',
       });
     }
     if (!req.user.clinicId) {
-      return res.status(400).json({ success: false, message: 'Doctor has no clinic assigned.' });
+      return res.status(400).json({ success: false, message: 'No clinic assigned.' });
     }
 
     const body = req.body || {};
-    let { firstName, lastName } = body;
+    let { firstName, middleName, lastName } = body;
     if (!firstName && body.name) {
       const split = splitName(body.name);
       firstName = split.firstName;
       lastName = split.lastName;
+      middleName = middleName || '';
     }
 
     const name = buildDisplayName({
       firstName,
+      middleName,
       lastName,
       preferredName: body.preferredName,
       name: body.name,
     });
-    const phone = body.phone?.trim();
-
+    const phone = normalizeIndianMobile(body.phone);
     if (!name || !phone) {
-      return res.status(400).json({ success: false, message: 'Name and phone are required.' });
+      return res.status(400).json({
+        success: false,
+        message: !phone
+          ? 'Mobile number must be a valid 10-digit Indian number (+91).'
+          : 'Name and phone are required.',
+      });
+    }
+    if (!String(body.gender || '').trim()) {
+      return res.status(422).json({ success: false, message: 'Gender is required.' });
     }
 
+    let doctorId = req.user.role === 'doctor' ? req.user._id : req.body.doctorId;
+    if (!doctorId) {
+      return res.status(400).json({ success: false, message: 'doctorId is required.' });
+    }
+    if (req.user.role !== 'doctor') {
+      const assigned = await User.findOne({
+        _id: doctorId,
+        role: 'doctor',
+        clinicId: req.user.clinicId,
+        isActive: { $ne: false },
+      }).select('_id');
+      if (!assigned) {
+        return res.status(403).json({ success: false, message: 'Doctor is outside your clinic.' });
+      }
+      doctorId = assigned._id;
+    }
+
+    const branchId = await resolveWriteBranchId(req.user, req.branchId);
+
     const existing = await Patient.findOne({
-      doctorId: req.user._id,
-      phone,
+      clinicId: req.user.clinicId,
+      doctorId,
+      branchId,
       isActive: true,
+      phone: { $in: phoneMatchVariants(phone) },
     });
     if (existing) {
       return res.status(409).json({
@@ -146,35 +196,62 @@ export const createPatient = async (req, res) => {
       familyHistory: body.familyHistory || body.clinical?.familyHistory || '',
       surgeries: body.surgeries || body.clinical?.surgeries || '',
       alerts: normalizeList(body.alerts ?? body.clinical?.alerts),
+      otherHistory: body.otherHistory || body.clinical?.otherHistory || '',
+      historyTags: normalizeList(body.historyTags ?? body.clinical?.historyTags),
     };
 
     const patientCode = await generatePatientCode();
+    const emergencyPhoneRaw =
+      body.emergencyContactPhone || body.emergencyContact?.phone || '';
+    const emergencyPhone = emergencyPhoneRaw
+      ? normalizeIndianMobile(emergencyPhoneRaw) || String(emergencyPhoneRaw).trim()
+      : '';
+    const secondaryPhoneRaw = body.secondaryPhone || '';
+    const secondaryPhone = secondaryPhoneRaw
+      ? normalizeIndianMobile(secondaryPhoneRaw) || String(secondaryPhoneRaw).trim()
+      : '';
 
     const patient = await Patient.create({
       clinicId: req.user.clinicId,
-      doctorId: req.user._id,
+      doctorId,
+      branchId,
       patientCode,
       firstName: firstName || '',
+      middleName: middleName || body.middleName || '',
       lastName: lastName || '',
       preferredName: body.preferredName || '',
       name,
       phone,
-      email: body.email?.trim() || '',
+      secondaryPhone,
+      email: normalizeEmail(body.email),
       dateOfBirth,
       age,
       gender: body.gender || '',
       address: body.address || '',
       city: body.city || '',
+      area: body.area || '',
       state: body.state || '',
       postalCode: body.postalCode || '',
+      bloodGroup: body.bloodGroup || '',
+      occupation: body.occupation || '',
+      nhId: body.nhId || '',
+      aadharNumber: body.aadharNumber || '',
+      caseId: body.caseId || '',
+      referredBy: body.referredBy || '',
+      room: body.room || '',
+      patientCategory: body.patientCategory || 'Patient',
+      linkedPatientName: body.linkedPatientName || '',
+      sendSms: body.sendSms !== undefined ? Boolean(body.sendSms) : true,
+      admitPatient: Boolean(body.admitPatient),
+      profilePhoto: body.profilePhoto || '',
       emergencyContact: {
         name: body.emergencyContactName || body.emergencyContact?.name || '',
         relationship:
           body.emergencyContactRelationship || body.emergencyContact?.relationship || '',
-        phone: body.emergencyContactPhone || body.emergencyContact?.phone || '',
+        phone: emergencyPhone,
       },
       clinical,
-      medicalHistory: clinical.medicalHistory,
+      medicalHistory: clinical.medicalHistory || clinical.otherHistory || '',
       notes: body.notes || '',
     });
 
@@ -187,8 +264,18 @@ export const createPatient = async (req, res) => {
       detail: `${patient.name} (${patient.patientCode})`,
     });
 
+    await writeAudit({
+      clinicId: patient.clinicId,
+      branchId: patient.branchId,
+      actorId: req.user._id,
+      action: AUDIT.PATIENT_CREATED,
+      entityType: 'patient',
+      entityId: patient._id,
+      detail: `${patient.name} · ${patient.patientCode}`,
+    });
+
     await notifyDoctor({
-      doctorId: req.user._id,
+      doctorId,
       clinicId: patient.clinicId,
       type: 'patient_added',
       title: 'New patient added',
@@ -199,18 +286,20 @@ export const createPatient = async (req, res) => {
 
     res.status(201).json({ success: true, message: 'Patient added.', patient });
   } catch (error) {
-    res.status(error.status || 500).json({ success: false, message: error.message });
+    console.error(error);
+    res.status(error.status || 500).json({ success: false, message: safeClientError(error) });
   }
 };
 
 export const listMyPatients = async (req, res) => {
   try {
-    if (req.user.role !== 'doctor') {
-      return res.status(403).json({ success: false, message: 'Only doctors can list patients.' });
+    const { search, gender } = req.query;
+    const filter = { isActive: true, ...tenantFilter(req.user, req.branchId) };
+    if (!hasPermission(req.user, P.PATIENTS_VIEW)) {
+      return res.status(403).json({ success: false, message: 'Not authorized.' });
     }
-
-    const { search, gender, page = 1, limit = 20 } = req.query;
-    const filter = { doctorId: req.user._id, isActive: true };
+    if (req.user.role === 'doctor' && req.query.mine === '1') filter.doctorId = req.user._id;
+    else if (req.query.doctorId) filter.doctorId = req.query.doctorId;
 
     if (gender) filter.gender = gender;
 
@@ -226,16 +315,18 @@ export const listMyPatients = async (req, res) => {
       ];
     }
 
-    const pageNum = Math.max(1, Number(page) || 1);
-    const limitNum = Math.min(100, Math.max(1, Number(limit) || 20));
-    const skip = (pageNum - 1) * limitNum;
+    const pageInfo = parsePagination(req.query, { page: 1, limit: 20, max: 100 });
+    const { page: pageNum, limit: limitNum, skip } = pageInfo;
 
     const [patients, total] = await Promise.all([
       Patient.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limitNum),
       Patient.countDocuments(filter),
     ]);
 
-    const withVisits = await attachVisitSummary(patients, req.user._id);
+    const withVisits = await attachVisitSummary(
+      patients,
+      req.user.role === 'doctor' ? req.user._id : null
+    );
 
     res.json({
       success: true,
@@ -243,10 +334,12 @@ export const listMyPatients = async (req, res) => {
       total,
       page: pageNum,
       pages: Math.ceil(total / limitNum) || 1,
+      limit: limitNum,
       patients: withVisits,
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    console.error(error);
+    res.status(500).json({ success: false, message: 'Something went wrong. Please try again.' });
   }
 };
 
@@ -257,18 +350,7 @@ export const getPatientById = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Patient not found.' });
     }
 
-    if (req.user.role === 'doctor') {
-      assertDoctorOwnsPatient(req, patient);
-    } else if (['clinic_admin', 'super_admin'].includes(req.user.role)) {
-      if (
-        req.user.role !== 'super_admin' &&
-        String(patient.clinicId) !== String(req.user.clinicId)
-      ) {
-        return res.status(403).json({ success: false, message: 'Outside your clinic.' });
-      }
-    } else {
-      return res.status(403).json({ success: false, message: 'Not authorized.' });
-    }
+    assertClinicPatient(req, patient);
 
     const appointments = await Appointment.find({ patientId: patient._id })
       .sort({ appointmentDate: -1, timeSlot: -1 })
@@ -303,35 +385,66 @@ export const getPatientById = async (req, res) => {
 
 export const updatePatient = async (req, res) => {
   try {
-    if (req.user.role !== 'doctor') {
-      return res.status(403).json({ success: false, message: 'Only doctors can update patients.' });
+    if (!hasPermission(req.user, P.PATIENTS_MANAGE)) {
+      return res.status(403).json({ success: false, message: 'Not authorized to update patients.' });
     }
 
     const patient = await Patient.findById(req.params.id);
     if (!patient || !patient.isActive) {
       return res.status(404).json({ success: false, message: 'Patient not found.' });
     }
-    assertDoctorOwnsPatient(req, patient);
+    assertClinicPatient(req, patient);
 
     const body = req.body || {};
     const fields = [
       'firstName',
+      'middleName',
       'lastName',
       'preferredName',
-      'phone',
-      'email',
       'gender',
       'address',
       'city',
+      'area',
       'state',
       'postalCode',
       'notes',
       'medicalHistory',
+      'bloodGroup',
+      'occupation',
+      'nhId',
+      'aadharNumber',
+      'caseId',
+      'referredBy',
+      'room',
+      'patientCategory',
+      'linkedPatientName',
+      'profilePhoto',
     ];
 
     for (const field of fields) {
       if (body[field] !== undefined) patient[field] = body[field];
     }
+
+    if (body.sendSms !== undefined) patient.sendSms = Boolean(body.sendSms);
+    if (body.admitPatient !== undefined) patient.admitPatient = Boolean(body.admitPatient);
+
+    if (body.phone !== undefined) {
+      const phone = normalizeIndianMobile(body.phone);
+      if (!phone) {
+        return res.status(422).json({
+          success: false,
+          message: 'Mobile number must be a valid 10-digit Indian number (+91).',
+        });
+      }
+      patient.phone = phone;
+    }
+    if (body.secondaryPhone !== undefined) {
+      const raw = body.secondaryPhone;
+      patient.secondaryPhone = raw
+        ? normalizeIndianMobile(raw) || String(raw).trim()
+        : '';
+    }
+    if (body.email !== undefined) patient.email = normalizeEmail(body.email);
 
     if (body.name !== undefined) patient.name = body.name;
     if (body.dateOfBirth !== undefined) {
@@ -343,23 +456,33 @@ export const updatePatient = async (req, res) => {
     if (
       body.emergencyContact ||
       body.emergencyContactName !== undefined ||
-      body.emergencyContactPhone !== undefined
+      body.emergencyContactPhone !== undefined ||
+      body.emergencyContactRelationship !== undefined
     ) {
+      const rawPhone =
+        body.emergencyContactPhone ??
+        body.emergencyContact?.phone ??
+        patient.emergencyContact?.phone;
       patient.emergencyContact = {
         name: body.emergencyContactName ?? body.emergencyContact?.name ?? patient.emergencyContact?.name,
         relationship:
           body.emergencyContactRelationship ??
           body.emergencyContact?.relationship ??
           patient.emergencyContact?.relationship,
-        phone:
-          body.emergencyContactPhone ??
-          body.emergencyContact?.phone ??
-          patient.emergencyContact?.phone,
+        phone: rawPhone ? normalizeIndianMobile(rawPhone) || String(rawPhone).trim() : '',
       };
     }
 
     const clinical = { ...(patient.clinical?.toObject?.() || patient.clinical || {}) };
-    if (body.clinical || body.allergies || body.conditions || body.medications || body.alerts) {
+    if (
+      body.clinical ||
+      body.allergies ||
+      body.conditions ||
+      body.medications ||
+      body.alerts ||
+      body.otherHistory !== undefined ||
+      body.historyTags !== undefined
+    ) {
       if (body.allergies !== undefined || body.clinical?.allergies !== undefined) {
         clinical.allergies = normalizeList(body.allergies ?? body.clinical?.allergies);
       }
@@ -372,11 +495,17 @@ export const updatePatient = async (req, res) => {
       if (body.alerts !== undefined || body.clinical?.alerts !== undefined) {
         clinical.alerts = normalizeList(body.alerts ?? body.clinical?.alerts);
       }
+      if (body.historyTags !== undefined || body.clinical?.historyTags !== undefined) {
+        clinical.historyTags = normalizeList(body.historyTags ?? body.clinical?.historyTags);
+      }
       if (body.familyHistory !== undefined || body.clinical?.familyHistory !== undefined) {
         clinical.familyHistory = body.familyHistory ?? body.clinical?.familyHistory ?? '';
       }
       if (body.surgeries !== undefined || body.clinical?.surgeries !== undefined) {
         clinical.surgeries = body.surgeries ?? body.clinical?.surgeries ?? '';
+      }
+      if (body.otherHistory !== undefined || body.clinical?.otherHistory !== undefined) {
+        clinical.otherHistory = body.otherHistory ?? body.clinical?.otherHistory ?? '';
       }
       if (body.medicalHistory !== undefined || body.clinical?.medicalHistory !== undefined) {
         clinical.medicalHistory = body.medicalHistory ?? body.clinical?.medicalHistory ?? '';
@@ -387,6 +516,7 @@ export const updatePatient = async (req, res) => {
 
     patient.name = buildDisplayName({
       firstName: patient.firstName,
+      middleName: patient.middleName,
       lastName: patient.lastName,
       preferredName: patient.preferredName,
       name: patient.name,
@@ -402,9 +532,20 @@ export const updatePatient = async (req, res) => {
       title: 'Patient information updated',
     });
 
+    await writeAudit({
+      clinicId: patient.clinicId,
+      branchId: patient.branchId,
+      actorId: req.user._id,
+      action: AUDIT.PATIENT_UPDATED,
+      entityType: 'patient',
+      entityId: patient._id,
+      detail: `${patient.name} · ${patient.patientCode}`,
+    });
+
     res.json({ success: true, message: 'Patient updated.', patient });
   } catch (error) {
-    res.status(error.status || 500).json({ success: false, message: error.message });
+    console.error(error);
+    res.status(error.status || 500).json({ success: false, message: safeClientError(error) });
   }
 };
 
@@ -417,7 +558,7 @@ export const addPatientNote = async (req, res) => {
     if (!patient || !patient.isActive) {
       return res.status(404).json({ success: false, message: 'Patient not found.' });
     }
-    assertDoctorOwnsPatient(req, patient);
+    assertClinicPatient(req, patient);
 
     const body = (req.body?.body || req.body?.note || '').trim();
     if (!body) {

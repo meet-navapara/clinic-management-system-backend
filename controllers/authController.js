@@ -5,11 +5,17 @@ import User from '../models/User.js';
 import Clinic from '../models/Clinic.js';
 import generateToken from '../utils/generateToken.js';
 import { toAuthUser } from '../utils/authUser.js';
+import { isStaffAccount } from '../utils/permissions.js';
+import { assertStaffBranchOperational } from '../utils/branchScope.js';
 import {
   DEFAULT_CLINIC_NAME,
   DEFAULT_CLINIC_SLUG,
   migrateClinicTenancy,
 } from '../utils/migrateClinic.js';
+import { provisionClinicForDoctor } from '../utils/clinicProvisioning.js';
+import Branch from '../models/Branch.js';
+import { writeAudit, AUDIT } from '../utils/audit.js';
+import { normalizeEmail } from '../utils/normalizeContact.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -56,19 +62,19 @@ const resolveClinic = async (clinicId) => {
 
 export const getSetupStatus = async (req, res) => {
   try {
-    const [clinic, clinicAdminExists, doctorExists] = await Promise.all([
+    const [clinic, superAdminExists, doctorExists] = await Promise.all([
       Clinic.findOne({ slug: DEFAULT_CLINIC_SLUG }).select('_id name slug'),
-      User.exists({ role: 'clinic_admin' }),
+      User.exists({ role: 'super_admin' }),
       User.exists({ role: 'doctor' }),
     ]);
 
     res.json({
       success: true,
       clinicExists: Boolean(clinic),
-      clinicAdminExists: Boolean(clinicAdminExists),
+      superAdminExists: Boolean(superAdminExists),
+      clinicAdminExists: Boolean(superAdminExists),
       doctorExists: Boolean(doctorExists),
-      // Backward-compatible alias used by older frontend
-      setupComplete: Boolean(clinicAdminExists),
+      setupComplete: Boolean(superAdminExists),
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -83,16 +89,16 @@ export const register = async (req, res) => {
   });
 };
 
-/** One-time clinic admin bootstrap (separate from doctor accounts). */
+/** One-time platform Super Admin bootstrap. Super Admin is not a clinic operator. */
 export const registerClinicAdmin = async (req, res) => {
   try {
     if (!assertSetupKey(req.body.setupKey, res)) return;
 
-    const existingAdmin = await User.findOne({ role: 'clinic_admin' });
+    const existingAdmin = await User.findOne({ role: 'super_admin' });
     if (existingAdmin) {
       return res.status(403).json({
         success: false,
-        message: 'Clinic admin already exists. Please sign in instead.',
+        message: 'Super Admin already exists. Please sign in instead.',
       });
     }
 
@@ -103,32 +109,22 @@ export const registerClinicAdmin = async (req, res) => {
       return res.status(409).json({ success: false, message: 'Email already registered.' });
     }
 
-    let clinic =
-      (await Clinic.findOne({ slug: DEFAULT_CLINIC_SLUG })) || (await migrateClinicTenancy());
-
-    if (!clinic) {
-      clinic = await Clinic.create({
-        name: DEFAULT_CLINIC_NAME,
-        slug: DEFAULT_CLINIC_SLUG,
-        isActive: true,
-      });
-    }
-
     const user = await User.create({
       name,
       email,
       password,
       phone,
-      role: 'clinic_admin',
-      clinicId: clinic._id,
+      role: 'super_admin',
+      clinicId: null,
       isActive: true,
+      approvalStatus: 'approved',
     });
 
     const token = generateToken(user._id);
 
     res.status(201).json({
       success: true,
-      message: 'Clinic admin account created successfully.',
+      message: 'Super Admin account created successfully.',
       token,
       user: toAuthUser(user),
     });
@@ -176,9 +172,39 @@ export const registerDoctor = async (req, res) => {
       return res.status(409).json({ success: false, message: 'Email already registered.' });
     }
 
-    const clinic = await resolveClinic(clinicId);
-    if (!clinic) {
-      return res.status(400).json({ success: false, message: 'No active clinic available for registration.' });
+    const practiceName = String(clinicName || '').trim();
+    if (!practiceName && !clinicId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Practice / clinic name is required.',
+      });
+    }
+
+    let clinic;
+    let branch;
+
+    if (clinicId) {
+      // Explicit invite/join only — never fall back to the shared demo clinic.
+      clinic = await Clinic.findOne({ _id: clinicId, isActive: true });
+      if (!clinic) {
+        return res.status(400).json({ success: false, message: 'Clinic not found or inactive.' });
+      }
+      branch =
+        (await Branch.findOne({ clinicId: clinic._id, isDefault: true, isActive: true })) ||
+        (await Branch.findOne({ clinicId: clinic._id, isActive: true }).sort({ createdAt: 1 }));
+      if (!branch) {
+        return res.status(400).json({ success: false, message: 'Clinic has no active branch.' });
+      }
+    } else {
+      const provisioned = await provisionClinicForDoctor({
+        clinicName: practiceName,
+        clinicAddress,
+        city,
+        phone,
+        email,
+      });
+      clinic = provisioned.clinic;
+      branch = provisioned.branch;
     }
 
     const displayName =
@@ -199,6 +225,8 @@ export const registerDoctor = async (req, res) => {
       phone,
       role: 'doctor',
       clinicId: clinic._id,
+      branchIds: [branch._id],
+      defaultBranchId: branch._id,
       specialization: specialization || 'Ayurvedic Physician',
       qualification: qualification || '',
       experience: experience || 0,
@@ -206,8 +234,8 @@ export const registerDoctor = async (req, res) => {
       consultationFee: consultationFee || 500,
       consultationTypes: Array.isArray(consultationTypes) ? consultationTypes : [],
       bio: bio || '',
-      clinicName: clinicName || clinic.name || '',
-      clinicAddress: clinicAddress || '',
+      clinicName: clinic.name,
+      clinicAddress: clinicAddress || clinic.address || '',
       city: city || '',
       state: state || '',
       country: country || '',
@@ -225,7 +253,7 @@ export const registerDoctor = async (req, res) => {
       user: toAuthUser(user),
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.status(error.status || 500).json({ success: false, message: error.message });
   }
 };
 
@@ -239,23 +267,46 @@ export const registerReceptionist = async (_req, res) => {
 export const login = async (req, res) => {
   try {
     const { email, password, role } = req.body;
+    const normalizedEmail = normalizeEmail(email);
 
-    const user = await User.findOne({ email }).select('+password');
+    const user = await User.findOne({ email: normalizedEmail }).select('+password');
     if (!user) {
       return res.status(401).json({ success: false, message: 'Invalid email or password.' });
     }
 
-    if (user.role === 'patient' || user.role === 'receptionist') {
+    if (user.role === 'patient') {
       return res.status(403).json({
         success: false,
-        message:
-          'Patient and staff self-service login is disabled. Doctors manage patient records directly.',
+        message: 'Patient self-service login is disabled. The clinic manages patient records directly.',
+      });
+    }
+
+    const isStaffRecord = user.role !== 'super_admin' && user.role !== 'doctor';
+    if (isStaffRecord) {
+      if (user.loginEnabled !== true) {
+        return res.status(403).json({
+          success: false,
+          message: 'Staff login is disabled. Ask a doctor to enable access for this account.',
+        });
+      }
+      if (role === 'super_admin' || role === 'doctor' || role === 'clinic_admin') {
+        return res.status(401).json({
+          success: false,
+          message: 'This is a clinic staff account. Sign in from clinic sign in without a doctor/admin role.',
+        });
+      }
+    }
+
+    if (user.staffStatus === 'suspended' || user.staffStatus === 'inactive') {
+      return res.status(403).json({
+        success: false,
+        message: 'Your account is not active. Contact the clinic.',
       });
     }
 
     if (role && user.role !== role) {
-      // Allow clinic_admin to login via admin form when role=clinic_admin
-      if (!(role === 'clinic_admin' && user.role === 'super_admin')) {
+      const adminAlias = role === 'clinic_admin' && user.role === 'super_admin';
+      if (!adminAlias) {
         return res.status(401).json({
           success: false,
           message: `This account is registered as a ${user.role}, not a ${role}.`,
@@ -266,31 +317,60 @@ export const login = async (req, res) => {
     if (user.role === 'doctor' && user.approvalStatus === 'suspended') {
       return res.status(403).json({
         success: false,
-        message: 'Your doctor account is suspended. Contact the clinic admin.',
+        message: 'Your doctor account is suspended.',
       });
     }
 
     if (user.isActive === false && user.approvalStatus !== 'pending') {
       return res.status(403).json({
         success: false,
-        message: 'Your account has been deactivated. Contact your clinic admin.',
+        message: 'Your account has been deactivated. Contact Super Admin.',
       });
     }
 
     if (user.role === 'doctor' && user.approvalStatus === 'rejected') {
       return res.status(403).json({
         success: false,
-        message: 'Your doctor account was not approved. Contact the clinic admin.',
+        message: 'Your doctor account was not approved. Contact Super Admin.',
       });
     }
 
     const isMatch = await user.comparePassword(password);
     if (!isMatch) {
+      if (user.clinicId) {
+        await writeAudit({
+          clinicId: user.clinicId,
+          actorId: user._id,
+          action: AUDIT.LOGIN_FAILED,
+          entityType: 'user',
+          entityId: user._id,
+          detail: 'Invalid password',
+        });
+      }
       return res.status(401).json({ success: false, message: 'Invalid email or password.' });
+    }
+
+    if (isStaffAccount(user)) {
+      try {
+        await assertStaffBranchOperational(user);
+      } catch (err) {
+        return res.status(err.status || 403).json({ success: false, message: err.message });
+      }
     }
 
     user.lastActiveAt = new Date();
     await user.save({ validateBeforeSave: false });
+
+    if (user.clinicId) {
+      await writeAudit({
+        clinicId: user.clinicId,
+        actorId: user._id,
+        action: AUDIT.LOGIN_SUCCESS,
+        entityType: 'user',
+        entityId: user._id,
+        detail: `${user.role} login`,
+      });
+    }
 
     const token = generateToken(user._id);
 
@@ -301,7 +381,8 @@ export const login = async (req, res) => {
       user: toAuthUser(user),
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    console.error(error);
+    res.status(500).json({ success: false, message: 'Something went wrong. Please try again.' });
   }
 };
 

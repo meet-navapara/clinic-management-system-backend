@@ -1,4 +1,5 @@
-import { body, validationResult } from 'express-validator';
+import { body, param, validationResult } from 'express-validator';
+import { normalizeIndianMobile, isValidEmail, normalizeEmail } from '../utils/normalizeContact.js';
 
 export const handleValidation = (req, res, next) => {
   const result = validationResult(req);
@@ -18,11 +19,42 @@ export const handleValidation = (req, res, next) => {
   });
 };
 
+const phoneField = (field, { required = true } = {}) => {
+  const chain = body(field).trim();
+  if (required) {
+    chain.notEmpty().withMessage('Mobile number is required');
+  } else {
+    chain.optional({ values: 'falsy' });
+  }
+  return chain.custom((value) => {
+    if (!required && !value) return true;
+    if (!normalizeIndianMobile(value)) {
+      throw new Error('Mobile number must be a valid 10-digit Indian number (+91).');
+    }
+    return true;
+  }).customSanitizer((value) => {
+    if (!value) return value;
+    return normalizeIndianMobile(value) || value;
+  });
+};
+
+const optionalEmailField = (field = 'email') =>
+  body(field)
+    .optional({ values: 'falsy' })
+    .trim()
+    .custom((value) => {
+      if (!isValidEmail(value)) throw new Error('Email address is invalid.');
+      return true;
+    })
+    .customSanitizer((value) => normalizeEmail(value));
+
+const GENDERS = ['male', 'female', 'other', 'prefer_not_to_say', ''];
+
 export const registerValidation = [
-  body('name').trim().notEmpty().withMessage('Name is required'),
-  body('email').isEmail().withMessage('Valid email is required'),
+  body('name').trim().notEmpty().withMessage('Name is required').isLength({ max: 120 }).withMessage('Name is too long'),
+  body('email').isEmail().withMessage('Valid email is required').customSanitizer((v) => normalizeEmail(v)),
   body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
-  body('phone').trim().notEmpty().withMessage('Phone number is required'),
+  phoneField('phone'),
 ];
 
 export const clinicAdminRegisterValidation = [
@@ -34,6 +66,15 @@ export const doctorRegisterValidation = [
   ...registerValidation,
   body('setupKey').optional().trim(),
   body('clinicId').optional().isMongoId().withMessage('Valid clinic is required'),
+  body('clinicName')
+    .optional({ values: 'falsy' })
+    .trim()
+    .custom((value, { req }) => {
+      if (!req.body.clinicId && !String(value || '').trim()) {
+        throw new Error('Practice / clinic name is required');
+      }
+      return true;
+    }),
   body('specialization').optional().trim(),
   body('qualification').optional().trim(),
   body('experience').optional().isInt({ min: 0 }).withMessage('Experience must be 0 or more'),
@@ -47,20 +88,159 @@ export const receptionistRegisterValidation = [
 ];
 
 export const loginValidation = [
-  body('email').isEmail().withMessage('Valid email is required'),
+  body('email').isEmail().withMessage('Valid email is required').customSanitizer((v) => normalizeEmail(v)),
   body('password').notEmpty().withMessage('Password is required'),
   body('role')
     .optional()
-    .isIn(['super_admin', 'clinic_admin', 'doctor', 'receptionist', 'patient'])
+    .isIn(['super_admin', 'clinic_admin', 'doctor'])
     .withMessage('Invalid role'),
 ];
 
 export const appointmentValidation = [
-  body('patientId').notEmpty().withMessage('Patient ID is required'),
+  body('patientId').notEmpty().withMessage('Patient ID is required').isMongoId().withMessage('Valid patient is required'),
   body('appointmentDate').isISO8601().withMessage('Valid appointment date is required'),
   body('timeSlot').trim().notEmpty().withMessage('Time slot is required'),
-  body('reason').trim().notEmpty().withMessage('Reason for visit is required'),
+  body('reason').trim().notEmpty().withMessage('Reason for visit is required').isLength({ max: 500 }).withMessage('Reason is too long'),
   body('doctorId').optional().isMongoId().withMessage('Valid doctor ID is required'),
+  body('notes').optional().trim().isLength({ max: 2000 }).withMessage('Notes are too long'),
+];
+
+export const patientCreateValidation = [
+  body('firstName').trim().notEmpty().withMessage('First name is required').isLength({ max: 80 }),
+  body('middleName').optional({ values: 'falsy' }).trim().isLength({ max: 80 }),
+  body('lastName').trim().notEmpty().withMessage('Last name is required').isLength({ max: 80 }),
+  body('name').optional({ values: 'falsy' }).trim().isLength({ max: 160 }).withMessage('Name is too long'),
+  phoneField('phone'),
+  optionalEmailField('email'),
+  body('gender').trim().notEmpty().withMessage('Gender is required').isIn(['male', 'female', 'other', 'prefer_not_to_say']).withMessage('Invalid gender'),
+  body('dateOfBirth')
+    .optional({ values: 'falsy' })
+    .isISO8601()
+    .withMessage('Date of birth is invalid')
+    .custom((value) => {
+      const d = new Date(value);
+      if (Number.isNaN(d.getTime())) throw new Error('Date of birth is invalid');
+      if (d > new Date()) throw new Error('Date of birth cannot be in the future');
+      if (d.getFullYear() < 1900) throw new Error('Date of birth is too far in the past');
+      return true;
+    }),
+  body('age').optional({ values: 'falsy' }).isInt({ min: 0, max: 150 }).withMessage('Age must be between 0 and 150'),
+  body('address').optional({ values: 'falsy' }).trim().isLength({ max: 500 }).withMessage('Address is too long'),
+  body('city').optional({ values: 'falsy' }).trim().isLength({ max: 80 }),
+  body('area').optional({ values: 'falsy' }).trim().isLength({ max: 80 }),
+  body('bloodGroup')
+    .optional({ values: 'falsy' })
+    .isIn(['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-', 'Unknown'])
+    .withMessage('Invalid blood group'),
+  body('aadharNumber')
+    .optional({ values: 'falsy' })
+    .trim()
+    .matches(/^\d{12}$/)
+    .withMessage('Aadhar number must be 12 digits'),
+  body('doctorId').optional().isMongoId().withMessage('Valid doctor is required'),
+  body('secondaryPhone')
+    .optional({ values: 'falsy' })
+    .custom((value) => {
+      if (!value) return true;
+      if (!normalizeIndianMobile(value)) {
+        throw new Error('Secondary number must be a valid 10-digit Indian number (+91).');
+      }
+      return true;
+    })
+    .customSanitizer((value) => (value ? normalizeIndianMobile(value) : value)),
+  body('emergencyContactPhone')
+    .optional({ values: 'falsy' })
+    .custom((value) => {
+      if (!value) return true;
+      if (!normalizeIndianMobile(value)) {
+        throw new Error('Relative contact must be a valid 10-digit Indian number (+91).');
+      }
+      return true;
+    })
+    .customSanitizer((value) => (value ? normalizeIndianMobile(value) : value)),
+];
+
+export const patientUpdateValidation = [
+  body('firstName').optional({ values: 'falsy' }).trim().isLength({ max: 80 }),
+  body('lastName').optional({ values: 'falsy' }).trim().isLength({ max: 80 }),
+  body('name').optional({ values: 'falsy' }).trim().isLength({ max: 160 }),
+  body('phone')
+    .optional()
+    .trim()
+    .custom((value) => {
+      if (value === undefined || value === null || value === '') return true;
+      if (!normalizeIndianMobile(value)) {
+        throw new Error('Mobile number must be a valid 10-digit Indian number (+91).');
+      }
+      return true;
+    })
+    .customSanitizer((value) => {
+      if (!value) return value;
+      return normalizeIndianMobile(value) || value;
+    }),
+  optionalEmailField('email'),
+  body('gender').optional({ values: 'falsy' }).isIn(GENDERS.filter(Boolean)).withMessage('Invalid gender'),
+  body('dateOfBirth')
+    .optional({ values: 'falsy' })
+    .isISO8601()
+    .withMessage('Date of birth is invalid')
+    .custom((value) => {
+      const d = new Date(value);
+      if (Number.isNaN(d.getTime())) throw new Error('Date of birth is invalid');
+      if (d > new Date()) throw new Error('Date of birth cannot be in the future');
+      if (d.getFullYear() < 1900) throw new Error('Date of birth is too far in the past');
+      return true;
+    }),
+  body('address').optional({ values: 'falsy' }).trim().isLength({ max: 500 }),
+  body('emergencyContactPhone')
+    .optional({ values: 'falsy' })
+    .custom((value) => {
+      if (!value) return true;
+      if (!normalizeIndianMobile(value)) {
+        throw new Error('Emergency contact phone must be a valid 10-digit Indian number (+91).');
+      }
+      return true;
+    })
+    .customSanitizer((value) => (value ? normalizeIndianMobile(value) : value)),
+  param('id').isMongoId().withMessage('Valid patient id is required'),
+];
+
+export const staffCreateValidation = [
+  body('name').trim().notEmpty().withMessage('Name is required').isLength({ max: 120 }),
+  body('email')
+    .trim()
+    .notEmpty()
+    .withMessage('Email is required')
+    .isEmail()
+    .withMessage('Valid email is required')
+    .customSanitizer((v) => normalizeEmail(v)),
+  phoneField('phone', { required: false }),
+  body('staffType').optional().trim(),
+  body('role').optional().trim(),
+  body('password')
+    .optional({ values: 'falsy' })
+    .isLength({ min: 6 })
+    .withMessage('Password must be at least 6 characters'),
+  body('loginEnabled').optional().toBoolean(),
+  body('password').custom((value, { req }) => {
+    if (req.body.loginEnabled === true && (!value || String(value).length < 6)) {
+      throw new Error('Set a password of at least 6 characters to enable login.');
+    }
+    return true;
+  }),
+];
+
+export const paymentValidation = [
+  body('amount').notEmpty().withMessage('Amount is required').isFloat({ gt: 0 }).withMessage('Amount must be greater than 0'),
+  body('paymentMethod').optional().trim().isLength({ max: 40 }),
+  body('notes').optional().trim().isLength({ max: 500 }),
+];
+
+export const branchCreateValidation = [
+  body('name').trim().notEmpty().withMessage('Branch name is required').isLength({ max: 120 }),
+  body('address').optional({ values: 'falsy' }).trim().isLength({ max: 500 }),
+  optionalEmailField('email'),
+  phoneField('phone', { required: false }),
 ];
 
 export const ratingValidation = [

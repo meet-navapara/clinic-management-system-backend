@@ -6,16 +6,23 @@ import {
   updatePatient,
   addPatientNote,
 } from '../controllers/patientController.js';
-import { protect, authorize, requireApprovedDoctor } from '../middleware/auth.js';
+import { protect } from '../middleware/auth.js';
+import { requireClinicUser, requirePermission, attachBranchContext } from '../middleware/access.js';
+import { P } from '../utils/permissions.js';
+import {
+  patientCreateValidation,
+  patientUpdateValidation,
+  handleValidation,
+} from '../middleware/validators.js';
 
 const router = Router();
 
-router.use(protect);
+router.use(protect, requireClinicUser, attachBranchContext);
 
-router.post('/', authorize('doctor'), requireApprovedDoctor, createPatient);
-router.get('/', authorize('doctor'), requireApprovedDoctor, listMyPatients);
-router.get('/:id', authorize('doctor', 'clinic_admin', 'super_admin'), getPatientById);
-router.put('/:id', authorize('doctor'), requireApprovedDoctor, updatePatient);
-router.post('/:id/notes', authorize('doctor'), requireApprovedDoctor, addPatientNote);
+router.post('/', requirePermission(P.PATIENTS_MANAGE), patientCreateValidation, handleValidation, createPatient);
+router.get('/', requirePermission(P.PATIENTS_VIEW), listMyPatients);
+router.get('/:id', requirePermission(P.PATIENTS_VIEW), getPatientById);
+router.put('/:id', requirePermission(P.PATIENTS_MANAGE), patientUpdateValidation, handleValidation, updatePatient);
+router.post('/:id/notes', requirePermission(P.PATIENTS_MANAGE, P.CONSULTATION), addPatientNote);
 
 export default router;

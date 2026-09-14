@@ -20,6 +20,12 @@ const appointmentSchema = new mongoose.Schema(
       default: null,
       index: true,
     },
+    branchId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Branch',
+      default: null,
+      index: true,
+    },
     patientId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Patient',
@@ -97,6 +103,7 @@ appointmentSchema.index(
     },
   }
 );
+appointmentSchema.index({ clinicId: 1, branchId: 1, appointmentDate: 1 });
 
 const Appointment = mongoose.model('Appointment', appointmentSchema);
 export default Appointment;

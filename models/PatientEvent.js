@@ -12,6 +12,11 @@ export const PATIENT_EVENT_TYPES = [
   'note_added',
   'reminder_sent',
   'reminder_failed',
+  'consultation_completed',
+  'prescription_created',
+  'invoice_created',
+  'payment_received',
+  'consent_signed',
 ];
 
 /**

@@ -14,7 +14,13 @@ const notificationLogSchema = new mongoose.Schema(
     appointmentId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Appointment',
-      required: true,
+      default: null,
+      index: true,
+    },
+    campaignId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Campaign',
+      default: null,
       index: true,
     },
     patientId: {
@@ -32,7 +38,13 @@ const notificationLogSchema = new mongoose.Schema(
     },
     notificationType: {
       type: String,
-      enum: ['appointment_reminder', 'appointment_confirmation', 'appointment_cancellation', 'followup_reminder'],
+      enum: [
+        'appointment_reminder',
+        'appointment_confirmation',
+        'appointment_cancellation',
+        'followup_reminder',
+        'campaign',
+      ],
       required: true,
     },
     channel: {

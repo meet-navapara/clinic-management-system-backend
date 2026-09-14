@@ -10,11 +10,13 @@ import {
   getDoctorDashboardStats,
 } from '../controllers/appointmentController.js';
 import { protect, authorize, requireApprovedDoctor } from '../middleware/auth.js';
+import { requireClinicUser, requirePermission, attachBranchContext } from '../middleware/access.js';
 import { appointmentValidation, handleValidation } from '../middleware/validators.js';
+import { P } from '../utils/permissions.js';
 
 const router = Router();
 
-router.use(protect);
+router.use(protect, requireClinicUser, attachBranchContext);
 
 router.get(
   '/dashboard-stats',
@@ -25,28 +27,33 @@ router.get(
 
 router.get(
   '/patients/search',
-  authorize('doctor', 'clinic_admin', 'super_admin'),
-  requireApprovedDoctor,
+  requireClinicUser,
+  requirePermission(P.PATIENTS_VIEW, P.APPOINTMENTS_MANAGE),
   findClinicPatient
 );
 
 router.post(
   '/',
-  authorize('doctor', 'clinic_admin', 'super_admin'),
-  requireApprovedDoctor,
+  requireClinicUser,
+  requirePermission(P.APPOINTMENTS_MANAGE),
   appointmentValidation,
   handleValidation,
   createAppointment
 );
-router.get('/my', authorize('doctor', 'clinic_admin', 'super_admin'), getMyAppointments);
-router.get('/:id', authorize('doctor', 'clinic_admin', 'super_admin'), getAppointmentById);
-router.patch('/:id/status', authorize('doctor', 'clinic_admin', 'super_admin'), updateAppointmentStatus);
+router.get('/my', requireClinicUser, requirePermission(P.APPOINTMENTS_VIEW), getMyAppointments);
+router.get('/:id', requireClinicUser, requirePermission(P.APPOINTMENTS_VIEW), getAppointmentById);
+router.patch(
+  '/:id/status',
+  requireClinicUser,
+  requirePermission(P.APPOINTMENTS_MANAGE),
+  updateAppointmentStatus
+);
 router.patch(
   '/:id/reschedule',
-  authorize('doctor', 'clinic_admin', 'super_admin'),
-  requireApprovedDoctor,
+  requireClinicUser,
+  requirePermission(P.APPOINTMENTS_MANAGE),
   rescheduleAppointment
 );
-router.get('/:id/whatsapp', authorize('doctor', 'clinic_admin', 'super_admin'), getWhatsAppLink);
+router.get('/:id/whatsapp', requireClinicUser, requirePermission(P.APPOINTMENTS_VIEW), getWhatsAppLink);
 
 export default router;
