@@ -39,6 +39,26 @@ describe('payment status', () => {
     assert.equal(paymentStatusFromAmounts(950, 950).paymentStatus, 'paid');
     assert.equal(roundMoney(paymentStatusFromAmounts(950, 400).dueAmount), 550);
   });
+
+  it('nets refunds out of paid and keeps refunded amount', () => {
+    const afterRefund = paymentStatusFromAmounts(700, 500, 500);
+    assert.equal(afterRefund.paymentStatus, 'refunded');
+    assert.equal(afterRefund.paidAmount, 0);
+    assert.equal(afterRefund.refundedAmount, 500);
+    assert.equal(afterRefund.dueAmount, 700);
+
+    const afterRepay = paymentStatusFromAmounts(700, 1100, 500);
+    assert.equal(afterRepay.paymentStatus, 'partially_paid');
+    assert.equal(afterRepay.paidAmount, 600);
+    assert.equal(afterRepay.refundedAmount, 500);
+    assert.equal(afterRepay.dueAmount, 100);
+
+    const settled = paymentStatusFromAmounts(600, 1100, 500);
+    assert.equal(settled.paymentStatus, 'paid');
+    assert.equal(settled.paidAmount, 600);
+    assert.equal(settled.dueAmount, 0);
+    assert.equal(settled.refundedAmount, 500);
+  });
 });
 
 describe('permissions', () => {

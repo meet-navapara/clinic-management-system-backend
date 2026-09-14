@@ -2,6 +2,7 @@ import NotificationLog from '../models/NotificationLog.js';
 import DoctorNotification from '../models/DoctorNotification.js';
 import { processDueReminders } from '../utils/notificationService.js';
 import { tenantFilter } from '../utils/branchScope.js';
+import { getUnreadCount } from '../utils/doctorNotify.js';
 
 /** Patient reminder delivery logs (not the doctor inbox). */
 export const listMyNotifications = async (req, res) => {

@@ -22,12 +22,20 @@ export const computeInvoiceTotals = ({ items = [], discount = 0, taxRate = 0, ta
   return { items: lines, subtotal, discount: discountValue, tax, total };
 };
 
-export const paymentStatusFromAmounts = (total, paidAmount, refundedAmount = 0) => {
-  const due = roundMoney(Math.max(0, Number(total) - Number(paidAmount) + Number(refundedAmount)));
-  const paid = roundMoney(Number(paidAmount));
-  const refunded = roundMoney(Number(refundedAmount));
-  if (refunded > 0 && paid <= refunded) return { paymentStatus: 'refunded', dueAmount: roundMoney(total), paidAmount: paid };
-  if (paid <= 0) return { paymentStatus: 'unpaid', dueAmount: roundMoney(total), paidAmount: 0 };
-  if (due > 0) return { paymentStatus: 'partially_paid', dueAmount: due, paidAmount: paid };
-  return { paymentStatus: 'paid', dueAmount: 0, paidAmount: paid };
+export const paymentStatusFromAmounts = (total, collectedAmount, refundedAmount = 0) => {
+  const collected = roundMoney(Number(collectedAmount));
+  const refunded = roundMoney(Math.max(0, Number(refundedAmount)));
+  const paid = roundMoney(Math.max(0, collected - refunded));
+  const due = roundMoney(Math.max(0, Number(total) - paid));
+
+  if (paid <= 0 && refunded > 0) {
+    return { paymentStatus: 'refunded', dueAmount: roundMoney(total), paidAmount: 0, refundedAmount: refunded };
+  }
+  if (paid <= 0) {
+    return { paymentStatus: 'unpaid', dueAmount: roundMoney(total), paidAmount: 0, refundedAmount: refunded };
+  }
+  if (due > 0) {
+    return { paymentStatus: 'partially_paid', dueAmount: due, paidAmount: paid, refundedAmount: refunded };
+  }
+  return { paymentStatus: 'paid', dueAmount: 0, paidAmount: paid, refundedAmount: refunded };
 };

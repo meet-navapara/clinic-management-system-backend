@@ -15,7 +15,37 @@ import {
 import { provisionClinicForDoctor } from '../utils/clinicProvisioning.js';
 import Branch from '../models/Branch.js';
 import { writeAudit, AUDIT } from '../utils/audit.js';
-import { normalizeEmail } from '../utils/normalizeContact.js';
+import { normalizeEmail, phoneMatchVariants } from '../utils/normalizeContact.js';
+
+const EMAIL_TAKEN = 'Email already registered.';
+const PHONE_TAKEN = 'Mobile number already registered.';
+
+async function findUserByEmail(email) {
+  const normalized = normalizeEmail(email);
+  if (!normalized) return null;
+  return User.findOne({ email: normalized });
+}
+
+async function findUserByPhone(phone) {
+  const variants = phoneMatchVariants(phone);
+  if (variants.length) {
+    return User.findOne({ phone: { $in: variants } });
+  }
+  const trimmed = String(phone || '').trim();
+  if (!trimmed) return null;
+  return User.findOne({ phone: trimmed });
+}
+
+async function uniqueContactErrors(email, phone) {
+  const [emailOwner, phoneOwner] = await Promise.all([
+    findUserByEmail(email),
+    findUserByPhone(phone),
+  ]);
+  const errors = {};
+  if (emailOwner) errors.email = EMAIL_TAKEN;
+  if (phoneOwner) errors.phone = PHONE_TAKEN;
+  return errors;
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -104,9 +134,13 @@ export const registerClinicAdmin = async (req, res) => {
 
     const { name, email, password, phone } = req.body;
 
-    const existingUser = await User.findOne({ email });
-    if (existingUser) {
-      return res.status(409).json({ success: false, message: 'Email already registered.' });
+    const contactErrors = await uniqueContactErrors(email, phone);
+    if (Object.keys(contactErrors).length) {
+      return res.status(409).json({
+        success: false,
+        message: contactErrors.email || contactErrors.phone,
+        errors: contactErrors,
+      });
     }
 
     const user = await User.create({
@@ -167,9 +201,13 @@ export const registerDoctor = async (req, res) => {
       if (!assertSetupKey(setupKey, res)) return;
     }
 
-    const existingUser = await User.findOne({ email });
-    if (existingUser) {
-      return res.status(409).json({ success: false, message: 'Email already registered.' });
+    const contactErrors = await uniqueContactErrors(email, phone);
+    if (Object.keys(contactErrors).length) {
+      return res.status(409).json({
+        success: false,
+        message: contactErrors.email || contactErrors.phone,
+        errors: contactErrors,
+      });
     }
 
     const practiceName = String(clinicName || '').trim();
@@ -253,6 +291,15 @@ export const registerDoctor = async (req, res) => {
       user: toAuthUser(user),
     });
   } catch (error) {
+    if (error?.code === 11000) {
+      const field = Object.keys(error.keyPattern || {})[0];
+      const message = field === 'phone' ? PHONE_TAKEN : EMAIL_TAKEN;
+      return res.status(409).json({
+        success: false,
+        message,
+        errors: { [field === 'phone' ? 'phone' : 'email']: message },
+      });
+    }
     res.status(error.status || 500).json({ success: false, message: error.message });
   }
 };

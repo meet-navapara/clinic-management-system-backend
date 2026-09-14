@@ -5,6 +5,7 @@ import Patient from '../models/Patient.js';
 import { nextSequence } from '../models/Counter.js';
 import { asyncHandler } from '../middleware/access.js';
 import { tenantFilter, assertSameClinic, assertBranchAccess } from '../utils/branchScope.js';
+import { parsePagination, paginated } from '../utils/pagination.js';
 import { writeAudit, AUDIT } from '../utils/audit.js';
 
 const startOfDay = (d = new Date()) => {
@@ -27,21 +28,39 @@ export const listQueue = asyncHandler(async (req, res) => {
     });
   }
   const date = startOfDay(req.query.date ? new Date(req.query.date) : new Date());
-  const next = new Date(date);
-  next.setDate(next.getDate() + 1);
-  const filter = {
+  const end = new Date(date);
+  end.setDate(end.getDate() + 1);
+  const dayFilter = {
     ...tenantFilter(req.user, req.branchId),
-    queueDate: { $gte: date, $lt: next },
+    queueDate: { $gte: date, $lt: end },
   };
-  if (req.query.doctorId) filter.doctorId = req.query.doctorId;
-  else if (req.query.mine === '1') filter.doctorId = req.user._id;
+  if (req.query.doctorId) dayFilter.doctorId = req.query.doctorId;
+  else if (req.query.mine === '1') dayFilter.doctorId = req.user._id;
+
+  const filter = { ...dayFilter };
   if (req.query.status) filter.status = req.query.status;
   else filter.status = { $nin: ['cancelled'] };
 
-  const tickets = await QueueTicket.find(filter).sort({ tokenNumber: 1 }).populate(POPULATE);
-  const current = tickets.find((t) => ['called', 'in_consultation'].includes(t.status)) || null;
-  const waiting = tickets.filter((t) => t.status === 'waiting');
-  res.json({ success: true, tickets, current, next: waiting[0] || null, waitingCount: waiting.length });
+  const { page, limit, skip } = parsePagination(req.query, { page: 1, limit: 20, max: 100 });
+
+  const [tickets, total, current, nextWaiting, waitingCount] = await Promise.all([
+    QueueTicket.find(filter).sort({ tokenNumber: 1 }).skip(skip).limit(limit).populate(POPULATE),
+    QueueTicket.countDocuments(filter),
+    QueueTicket.findOne({ ...dayFilter, status: { $in: ['called', 'in_consultation'] } })
+      .sort({ tokenNumber: 1 })
+      .populate(POPULATE),
+    QueueTicket.findOne({ ...dayFilter, status: 'waiting' }).sort({ tokenNumber: 1 }).populate(POPULATE),
+    QueueTicket.countDocuments({ ...dayFilter, status: 'waiting' }),
+  ]);
+
+  res.json({
+    success: true,
+    ...paginated({ items: tickets, total, page, limit }),
+    tickets,
+    current,
+    next: nextWaiting,
+    waitingCount,
+  });
 });
 
 export const checkIn = asyncHandler(async (req, res) => {

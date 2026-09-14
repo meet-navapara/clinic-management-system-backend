@@ -24,12 +24,17 @@ export const getAdminDashboard = async (req, res) => {
       approvedDoctors,
       suspendedDoctors,
       rejectedDoctors,
+      disabledStaff,
     ] = await Promise.all([
       User.countDocuments(base),
       User.countDocuments({ ...base, approvalStatus: 'pending' }),
       User.countDocuments({ ...base, approvalStatus: 'approved' }),
       User.countDocuments({ ...base, approvalStatus: 'suspended' }),
       User.countDocuments({ ...base, approvalStatus: 'rejected' }),
+      User.countDocuments({
+        role: { $nin: ['super_admin', 'doctor'] },
+        $or: [{ staffStatus: { $in: ['inactive', 'suspended'] } }, { isActive: false }],
+      }),
     ]);
 
     res.json({
@@ -41,6 +46,9 @@ export const getAdminDashboard = async (req, res) => {
           approved: approvedDoctors,
           suspended: suspendedDoctors,
           rejected: rejectedDoctors,
+        },
+        staff: {
+          disabled: disabledStaff,
         },
       },
     });
@@ -159,9 +167,18 @@ export const setDoctorApproval = async (req, res) => {
     }
 
     doctor.approvalStatus = status;
-    if (status === 'approved') doctor.isActive = true;
-    if (status === 'rejected' || status === 'suspended') doctor.isActive = false;
-    if (status === 'pending') doctor.isActive = true;
+    if (status === 'approved') {
+      doctor.isActive = true;
+      doctor.staffStatus = 'active';
+    }
+    if (status === 'rejected' || status === 'suspended') {
+      doctor.isActive = false;
+      doctor.staffStatus = 'inactive';
+    }
+    if (status === 'pending') {
+      doctor.isActive = true;
+      doctor.staffStatus = 'active';
+    }
     await doctor.save();
 
     const notifyType =
@@ -189,6 +206,92 @@ export const setDoctorApproval = async (req, res) => {
       success: true,
       message: `Doctor ${status}.`,
       doctor: toAuthUser(doctor),
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+const DISABLED_STAFF_FILTER = {
+  role: { $nin: ['super_admin', 'doctor'] },
+  $or: [{ staffStatus: { $in: ['inactive', 'suspended'] } }, { isActive: false }],
+};
+
+export const listDisabledStaff = async (req, res) => {
+  try {
+    const { search } = req.query;
+    const filter = { ...DISABLED_STAFF_FILTER };
+    if (search?.trim()) {
+      const q = String(search).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      filter.$and = [
+        { $or: DISABLED_STAFF_FILTER.$or },
+        {
+          $or: [
+            { name: new RegExp(q, 'i') },
+            { email: new RegExp(q, 'i') },
+            { phone: new RegExp(q, 'i') },
+          ],
+        },
+      ];
+      delete filter.$or;
+    }
+
+    const staff = await User.find(filter)
+      .select('-password')
+      .sort({ updatedAt: -1 })
+      .limit(100)
+      .populate('clinicId', 'name')
+      .populate('defaultBranchId', 'name');
+
+    res.json({
+      success: true,
+      staff: staff.map((row) => {
+        const payload = toAuthUser(row);
+        const clinic = row.clinicId;
+        return {
+          ...payload,
+          clinicName:
+            (clinic && typeof clinic === 'object' && clinic.name) || payload.clinicName || '—',
+          staffTypeLabel: (payload.staffType || payload.role || 'staff').replace(/_/g, ' '),
+        };
+      }),
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const setStaffApproval = async (req, res) => {
+  try {
+    const { status } = req.body;
+    if (!['approved', 'rejected'].includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'status must be approved or rejected.',
+      });
+    }
+
+    const staff = await User.findOne({
+      _id: req.params.id,
+      role: { $nin: ['super_admin', 'doctor'] },
+    });
+    if (!staff) {
+      return res.status(404).json({ success: false, message: 'Staff not found.' });
+    }
+
+    if (status === 'approved') {
+      staff.staffStatus = 'active';
+      staff.isActive = true;
+    } else {
+      staff.staffStatus = 'inactive';
+      staff.isActive = false;
+    }
+    await staff.save();
+
+    res.json({
+      success: true,
+      message: status === 'approved' ? 'Staff approved.' : 'Staff kept disabled.',
+      staff: toAuthUser(staff),
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

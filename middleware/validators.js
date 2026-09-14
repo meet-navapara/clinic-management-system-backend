@@ -50,6 +50,14 @@ const optionalEmailField = (field = 'email') =>
 
 const GENDERS = ['male', 'female', 'other', 'prefer_not_to_say', ''];
 
+const STRONG_PASSWORD_MESSAGE =
+  'Password must contain at least one uppercase letter, one lowercase letter, one digit, and one special character.';
+
+function meetsPasswordComplexity(password) {
+  const value = String(password || '');
+  return /[A-Z]/.test(value) && /[a-z]/.test(value) && /\d/.test(value) && /[^A-Za-z0-9]/.test(value);
+}
+
 export const registerValidation = [
   body('name').trim().notEmpty().withMessage('Name is required').isLength({ max: 120 }).withMessage('Name is too long'),
   body('email').isEmail().withMessage('Valid email is required').customSanitizer((v) => normalizeEmail(v)),
@@ -76,7 +84,25 @@ export const doctorRegisterValidation = [
       return true;
     }),
   body('specialization').optional().trim(),
-  body('qualification').optional().trim(),
+  body('password').custom((value) => {
+    if (!value || String(value).length < 6) return true;
+    if (!meetsPasswordComplexity(value)) {
+      throw new Error(STRONG_PASSWORD_MESSAGE);
+    }
+    return true;
+  }),
+  body('confirmPassword')
+    .notEmpty()
+    .withMessage('Confirm password is required')
+    .custom((value, { req }) => {
+      if (value !== req.body.password) {
+        throw new Error('Passwords do not match');
+      }
+      return true;
+    }),
+  body('qualification').trim().notEmpty().withMessage('Qualification is required'),
+  body('licenseNumber').trim().notEmpty().withMessage('License number is required'),
+  body('city').trim().notEmpty().withMessage('City is required'),
   body('experience').optional().isInt({ min: 0 }).withMessage('Experience must be 0 or more'),
   body('consultationFee').optional().isInt({ min: 0 }).withMessage('Fee must be 0 or more'),
   body('bio').optional().trim(),
@@ -88,7 +114,13 @@ export const receptionistRegisterValidation = [
 ];
 
 export const loginValidation = [
-  body('email').isEmail().withMessage('Valid email is required').customSanitizer((v) => normalizeEmail(v)),
+  body('email')
+    .trim()
+    .notEmpty()
+    .withMessage('Email is required')
+    .isEmail()
+    .withMessage('Valid email is required')
+    .customSanitizer((v) => normalizeEmail(v)),
   body('password').notEmpty().withMessage('Password is required'),
   body('role')
     .optional()
@@ -206,25 +238,40 @@ export const patientUpdateValidation = [
 ];
 
 export const staffCreateValidation = [
-  body('name').trim().notEmpty().withMessage('Name is required').isLength({ max: 120 }),
+  body('name').trim().notEmpty().withMessage('Full name is required').isLength({ max: 120 }).withMessage('Name is too long'),
   body('email')
     .trim()
     .notEmpty()
     .withMessage('Email is required')
     .isEmail()
-    .withMessage('Valid email is required')
+    .withMessage('Please enter a valid email address')
     .customSanitizer((v) => normalizeEmail(v)),
-  phoneField('phone', { required: false }),
-  body('staffType').optional().trim(),
+  phoneField('phone'),
+  body('staffType').trim().notEmpty().withMessage('Staff type is required'),
   body('role').optional().trim(),
-  body('password')
-    .optional({ values: 'falsy' })
-    .isLength({ min: 6 })
-    .withMessage('Password must be at least 6 characters'),
   body('loginEnabled').optional().toBoolean(),
+  body('branchIds').custom((value, { req }) => {
+    const type = String(req.body.staffType || req.body.role || '').trim();
+    if (type === 'doctor') return true;
+    const ids = Array.isArray(value) ? value.filter(Boolean) : [];
+    if (!ids.length && !req.body.defaultBranchId) {
+      throw new Error('Branch is required.');
+    }
+    return true;
+  }),
   body('password').custom((value, { req }) => {
-    if (req.body.loginEnabled === true && (!value || String(value).length < 6)) {
-      throw new Error('Set a password of at least 6 characters to enable login.');
+    const type = String(req.body.staffType || req.body.role || '').trim();
+    const isDoctor = type === 'doctor';
+    const enableLogin = isDoctor ? true : Boolean(req.body.loginEnabled);
+    if (enableLogin && !value) {
+      throw new Error('Password is required.');
+    }
+    if (!value) return true;
+    if (String(value).length < 6) {
+      throw new Error('Password must be at least 6 characters');
+    }
+    if (!meetsPasswordComplexity(value)) {
+      throw new Error(STRONG_PASSWORD_MESSAGE);
     }
     return true;
   }),

@@ -45,7 +45,7 @@ async function refreshInvoicePayment(invoice) {
   const derived = paymentStatusFromAmounts(invoice.total, paid, refunded);
   invoice.paidAmount = derived.paidAmount;
   invoice.dueAmount = derived.dueAmount;
-  invoice.refundedAmount = refunded;
+  invoice.refundedAmount = derived.refundedAmount;
   invoice.paymentStatus = derived.paymentStatus;
   await invoice.save();
   return invoice;
@@ -102,7 +102,8 @@ export const listInvoices = asyncHandler(async (req, res) => {
 });
 
 export const getInvoice = asyncHandler(async (req, res) => {
-  const invoice = await loadInvoice(req, req.params.id);
+  let invoice = await loadInvoice(req, req.params.id);
+  invoice = await refreshInvoicePayment(invoice);
   await invoice.populate(POPULATE);
   const payments = await Payment.find({ invoiceId: invoice._id }).sort({ paymentDate: -1 }).populate('receivedBy', 'name');
   res.json({ success: true, invoice, payments });
@@ -387,6 +388,8 @@ export const patientBilling = asyncHandler(async (req, res) => {
   if (req.user.role === 'doctor' && !hasPermission(req.user, P.REVENUE_ALL)) {
     filter.doctorId = req.user._id;
   }
-  const invoices = await Invoice.find(filter).sort({ invoiceDate: -1 }).limit(100).populate('doctorId', 'name');
+  const invoices = await Invoice.find(filter).sort({ invoiceDate: -1 }).limit(100);
+  await Promise.all(invoices.map((invoice) => refreshInvoicePayment(invoice)));
+  await Invoice.populate(invoices, { path: 'doctorId', select: 'name' });
   res.json({ success: true, invoices });
 });

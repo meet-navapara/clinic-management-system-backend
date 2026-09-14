@@ -23,11 +23,20 @@ export const listStaff = asyncHandler(async (req, res) => {
     filter.$or = [{ staffType: req.query.staffType }, { role: req.query.staffType }];
   }
   if (req.query.status) {
-    if (req.query.status === 'inactive') filter.isActive = false;
-    else if (req.query.status === 'suspended') filter.staffStatus = 'suspended';
+    if (req.query.status === 'inactive' || req.query.status === 'disabled') {
+      filter.$and = [
+        ...(filter.$and || []),
+        {
+          $or: [
+            { staffStatus: { $in: ['inactive', 'suspended'] } },
+            { isActive: false },
+          ],
+        },
+      ];
+    } else if (req.query.status === 'suspended') filter.staffStatus = 'suspended';
     else if (req.query.status === 'active') {
       filter.isActive = { $ne: false };
-      filter.staffStatus = { $ne: 'suspended' };
+      filter.staffStatus = 'active';
     }
   }
   // Doctor branch selector: filter staff assigned to that branch (doctors stay clinic-wide).
@@ -240,8 +249,8 @@ export const updateStaff = asyncHandler(async (req, res) => {
   if (req.body.staffStatus) {
     user.staffStatus = req.body.staffStatus;
     user.isActive = req.body.staffStatus === 'active';
-    if (req.body.staffStatus === 'suspended' && user.role === 'doctor') {
-      user.approvalStatus = 'suspended';
+    if (user.role === 'doctor') {
+      user.approvalStatus = req.body.staffStatus === 'active' ? 'approved' : 'suspended';
     }
     if (req.body.staffStatus !== 'active') {
       await writeAudit({
