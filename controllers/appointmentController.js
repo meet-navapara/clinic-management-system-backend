@@ -26,7 +26,7 @@ const APPT_POPULATE = [
   {
     path: 'patientId',
     select:
-      'name firstName lastName preferredName patientCode email phone age gender address clinical notes medicalHistory emergencyContact',
+      'name firstName lastName preferredName patientCode email phone age gender address clinical notes medicalHistory emergencyContact profilePhoto',
   },
   { path: 'patient', select: 'name email phone profilePhoto clinicId' },
   {
