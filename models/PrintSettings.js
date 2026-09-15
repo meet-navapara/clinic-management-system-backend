@@ -10,26 +10,70 @@ export const PRINT_DOC_TYPES = [
   'queue_token',
 ];
 
+/**
+ * Per-clinic print / invoice branding template.
+ * One document per clinicId — used by all printable docs for that clinic.
+ */
 const printSettingsSchema = new mongoose.Schema(
   {
-    clinicId: { type: mongoose.Schema.Types.ObjectId, ref: 'Clinic', required: true, unique: true },
-    logo: { type: String, default: '' },
-    clinicName: { type: String, default: '', trim: true },
-    address: { type: String, default: '', trim: true },
-    phone: { type: String, default: '', trim: true },
-    email: { type: String, default: '', trim: true },
-    website: { type: String, default: '', trim: true },
-    registrationNumber: { type: String, default: '', trim: true },
-    gstNumber: { type: String, default: '', trim: true },
-    taxLabel: { type: String, default: 'GST', trim: true },
-    headerText: { type: String, default: '', trim: true },
-    footerText: { type: String, default: 'Get well soon.', trim: true },
-    terms: { type: String, default: '', trim: true },
+    clinicId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Clinic',
+      required: true,
+      unique: true,
+      index: true,
+    },
+    logo: { type: String, default: '', maxlength: 600000 },
+    clinicName: { type: String, default: '', trim: true, maxlength: 200 },
+    address: { type: String, default: '', trim: true, maxlength: 500 },
+    phone: { type: String, default: '', trim: true, maxlength: 80 },
+    email: { type: String, default: '', trim: true, maxlength: 120 },
+    website: { type: String, default: '', trim: true, maxlength: 200 },
+    registrationNumber: { type: String, default: '', trim: true, maxlength: 80 },
+    gstNumber: { type: String, default: '', trim: true, maxlength: 40 },
+    taxLabel: { type: String, default: 'GST', trim: true, maxlength: 40 },
+
+    headerText: { type: String, default: '', trim: true, maxlength: 2000 },
+    footerText: { type: String, default: 'Get well soon.', trim: true, maxlength: 2000 },
+    headerHtml: { type: String, default: '', maxlength: 20000 },
+    footerHtml: { type: String, default: '', maxlength: 20000 },
+    terms: { type: String, default: '', trim: true, maxlength: 2000 },
+
+    includeHeader: { type: Boolean, default: true },
+    includeFooter: { type: Boolean, default: true },
+
+    showLeftSignature: { type: Boolean, default: false },
+    showRightSignature: { type: Boolean, default: true },
+    leftSignatureText: { type: String, default: '', trim: true, maxlength: 500 },
+    rightSignatureText: { type: String, default: '', trim: true, maxlength: 500 },
+    signatureImage: { type: String, default: '', maxlength: 600000 },
+    signatureLabel: { type: String, default: 'Doctor signature', trim: true, maxlength: 120 },
     showSignature: { type: Boolean, default: true },
-    signatureLabel: { type: String, default: 'Doctor signature', trim: true },
-    paperSize: { type: String, enum: ['A4', 'A5', 'receipt'], default: 'A4' },
-    currency: { type: String, default: 'INR' },
-    currencySymbol: { type: String, default: '₹' },
+
+    paperSize: {
+      type: String,
+      enum: ['A4', 'A5', 'Letter', 'receipt'],
+      default: 'A4',
+    },
+    pageOrientation: {
+      type: String,
+      enum: ['portrait', 'landscape'],
+      default: 'portrait',
+    },
+    marginTopIn: { type: Number, default: 0.5, min: 0, max: 3 },
+    marginBottomIn: { type: Number, default: 0.5, min: 0, max: 3 },
+    marginLeftIn: { type: Number, default: 0.5, min: 0, max: 3 },
+    marginRightIn: { type: Number, default: 0.5, min: 0, max: 3 },
+
+    headingFontSize: { type: Number, default: 14, min: 8, max: 28 },
+    contentFontSize: { type: Number, default: 12, min: 8, max: 20 },
+    subContentFontSize: { type: Number, default: 11, min: 8, max: 18 },
+
+    showPoweredBy: { type: Boolean, default: false },
+    coloredPrint: { type: Boolean, default: true },
+
+    currency: { type: String, default: 'INR', trim: true, maxlength: 8 },
+    currencySymbol: { type: String, default: '₹', trim: true, maxlength: 8 },
   },
   { timestamps: true }
 );

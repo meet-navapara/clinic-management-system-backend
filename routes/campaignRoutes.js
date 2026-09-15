@@ -10,9 +10,16 @@ import {
   previewCampaign,
   sendCampaign,
   cancelCampaign,
+  testCampaign,
+  retryFailed,
+  duplicateCampaign,
+  getIntegrationsStatus,
 } from '../controllers/campaignController.js';
 
 const router = Router();
+
+router.get('/integrations/status', protect, requireClinicUser, requirePermission(P.CAMPAIGNS_MANAGE), getIntegrationsStatus);
+
 router.use(protect, requireClinicUser, attachBranchContext);
 
 router.get('/', requirePermission(P.CAMPAIGNS_MANAGE), listCampaigns);
@@ -21,6 +28,9 @@ router.get('/:id', requirePermission(P.CAMPAIGNS_MANAGE), getCampaign);
 router.patch('/:id', requirePermission(P.CAMPAIGNS_MANAGE), updateCampaign);
 router.post('/:id/preview', requirePermission(P.CAMPAIGNS_MANAGE), previewCampaign);
 router.post('/:id/send', requirePermission(P.CAMPAIGNS_MANAGE), sendCampaign);
+router.post('/:id/test', requirePermission(P.CAMPAIGNS_MANAGE), testCampaign);
 router.post('/:id/cancel', requirePermission(P.CAMPAIGNS_MANAGE), cancelCampaign);
+router.post('/:id/retry-failed', requirePermission(P.CAMPAIGNS_MANAGE), retryFailed);
+router.post('/:id/duplicate', requirePermission(P.CAMPAIGNS_MANAGE), duplicateCampaign);
 
 export default router;

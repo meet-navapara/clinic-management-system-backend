@@ -11,13 +11,19 @@ const campaignDeliverySchema = new mongoose.Schema(
     recipientName: { type: String, default: '' },
     status: {
       type: String,
-      enum: ['queued', 'sent', 'failed', 'skipped'],
+      enum: ['queued', 'sent', 'delivered', 'read', 'failed', 'skipped', 'opted_out'],
       default: 'queued',
       index: true,
     },
+    queuedAt: { type: Date, default: null },
     sentAt: { type: Date, default: null },
+    deliveredAt: { type: Date, default: null },
+    failedAt: { type: Date, default: null },
+    readAt: { type: Date, default: null },
     failureReason: { type: String, default: '' },
-    provider: { type: String, default: 'internal' },
+    provider: { type: String, default: '' },
+    providerMessageId: { type: String, default: '', index: true },
+    renderedMessage: { type: String, default: '' },
     metadata: { type: mongoose.Schema.Types.Mixed, default: {} },
   },
   { timestamps: true }
@@ -25,6 +31,7 @@ const campaignDeliverySchema = new mongoose.Schema(
 
 campaignDeliverySchema.index({ campaignId: 1, patientId: 1 }, { unique: true });
 campaignDeliverySchema.index({ clinicId: 1, campaignId: 1, status: 1 });
+campaignDeliverySchema.index({ providerMessageId: 1 });
 
 const CampaignDelivery = mongoose.model('CampaignDelivery', campaignDeliverySchema);
 export default CampaignDelivery;

@@ -10,6 +10,45 @@ import Appointment from '../models/Appointment.js';
 import { asyncHandler } from '../middleware/access.js';
 import { clinicQuery, assertSameClinic, assertBranchAccess } from '../utils/branchScope.js';
 
+const ALLOWED_UPDATE = [
+  'logo',
+  'clinicName',
+  'address',
+  'phone',
+  'email',
+  'website',
+  'registrationNumber',
+  'gstNumber',
+  'taxLabel',
+  'headerText',
+  'footerText',
+  'headerHtml',
+  'footerHtml',
+  'terms',
+  'includeHeader',
+  'includeFooter',
+  'showLeftSignature',
+  'showRightSignature',
+  'leftSignatureText',
+  'rightSignatureText',
+  'signatureImage',
+  'signatureLabel',
+  'showSignature',
+  'paperSize',
+  'pageOrientation',
+  'marginTopIn',
+  'marginBottomIn',
+  'marginLeftIn',
+  'marginRightIn',
+  'headingFontSize',
+  'contentFontSize',
+  'subContentFontSize',
+  'showPoweredBy',
+  'coloredPrint',
+  'currency',
+  'currencySymbol',
+];
+
 const brandingFrom = (clinic, settings) => ({
   logo: settings?.logo || clinic?.logo || '',
   clinicName: settings?.clinicName || clinic?.name || '',
@@ -22,10 +61,31 @@ const brandingFrom = (clinic, settings) => ({
   taxLabel: settings?.taxLabel || 'GST',
   headerText: settings?.headerText || '',
   footerText: settings?.footerText || '',
+  headerHtml: settings?.headerHtml || '',
+  footerHtml: settings?.footerHtml || '',
   terms: settings?.terms || '',
-  showSignature: settings?.showSignature !== false,
+  includeHeader: settings?.includeHeader !== false,
+  includeFooter: settings?.includeFooter !== false,
+  showLeftSignature: Boolean(settings?.showLeftSignature),
+  showRightSignature:
+    settings?.showRightSignature !== false && settings?.showSignature !== false,
+  leftSignatureText: settings?.leftSignatureText || '',
+  rightSignatureText: settings?.rightSignatureText || '',
+  signatureImage: settings?.signatureImage || '',
   signatureLabel: settings?.signatureLabel || 'Doctor signature',
+  showSignature: settings?.showSignature !== false,
   paperSize: settings?.paperSize || 'A4',
+  pageOrientation: settings?.pageOrientation || 'portrait',
+  marginTopIn: settings?.marginTopIn ?? 0.5,
+  marginBottomIn: settings?.marginBottomIn ?? 0.5,
+  marginLeftIn: settings?.marginLeftIn ?? 0.5,
+  marginRightIn: settings?.marginRightIn ?? 0.5,
+  headingFontSize: settings?.headingFontSize ?? 14,
+  contentFontSize: settings?.contentFontSize ?? 12,
+  subContentFontSize: settings?.subContentFontSize ?? 11,
+  showPoweredBy: Boolean(settings?.showPoweredBy),
+  coloredPrint: settings?.coloredPrint !== false,
+  currency: settings?.currency || clinic?.currency || 'INR',
   currencySymbol: settings?.currencySymbol || clinic?.currencySymbol || '₹',
 });
 
@@ -42,19 +102,26 @@ export const getPrintSettings = asyncHandler(async (req, res) => {
       logo: clinic.logo,
     });
   }
-  res.json({ success: true, settings, branding: brandingFrom(clinic, settings) });
+  res.json({ success: true, settings: brandingFrom(clinic, settings), branding: brandingFrom(clinic, settings) });
 });
 
 export const updatePrintSettings = asyncHandler(async (req, res) => {
   const clinicId = req.user.clinicId;
-  const updates = { ...req.body, clinicId };
-  delete updates._id;
-  const settings = await PrintSettings.findOneAndUpdate({ clinicId }, updates, {
+  const patch = { clinicId };
+  for (const key of ALLOWED_UPDATE) {
+    if (req.body[key] !== undefined) patch[key] = req.body[key];
+  }
+  const settings = await PrintSettings.findOneAndUpdate({ clinicId }, { $set: patch }, {
     new: true,
     upsert: true,
     setDefaultsOnInsert: true,
   });
-  res.json({ success: true, settings });
+  const clinic = await Clinic.findById(clinicId);
+  res.json({
+    success: true,
+    settings: brandingFrom(clinic, settings),
+    message: 'Print settings saved',
+  });
 });
 
 export const printPayload = asyncHandler(async (req, res) => {

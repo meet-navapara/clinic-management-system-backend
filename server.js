@@ -23,6 +23,7 @@ import consentRoutes from './routes/consentRoutes.js';
 import queueRoutes from './routes/queueRoutes.js';
 import campaignRoutes from './routes/campaignRoutes.js';
 import opsRoutes from './routes/opsRoutes.js';
+import commsWebhookRoutes from './routes/commsWebhookRoutes.js';
 import { startReminderScheduler } from './utils/reminderScheduler.js';
 import { migratePracticeDomain } from './utils/migratePracticeDomain.js';
 import { migrateV2Foundation } from './utils/migrateV2.js';
@@ -103,7 +104,7 @@ app.use(
   })
 );
 
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: '2mb' }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/api', apiLimiter);
 
@@ -129,6 +130,7 @@ app.use('/api/consent', consentRoutes);
 app.use('/api/queue', queueRoutes);
 app.use('/api/campaigns', campaignRoutes);
 app.use('/api/ops', opsRoutes);
+app.use('/api/webhooks/comms', commsWebhookRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ success: false, message: 'Route not found.' });

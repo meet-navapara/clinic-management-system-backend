@@ -49,7 +49,7 @@ const notificationLogSchema = new mongoose.Schema(
     },
     channel: {
       type: String,
-      enum: ['whatsapp_link', 'sms', 'email', 'log'],
+      enum: ['whatsapp_link', 'whatsapp', 'sms', 'email', 'log'],
       default: 'log',
     },
     message: {
