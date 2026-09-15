@@ -8,6 +8,7 @@ import {
 } from '../controllers/notificationController.js';
 import { protect, authorize, requireApprovedDoctor } from '../middleware/auth.js';
 import { attachBranchContext } from '../middleware/access.js';
+import { processDueLimiter } from '../middleware/rateLimit.js';
 
 const router = Router();
 
@@ -21,6 +22,8 @@ router.get('/', authorize('doctor'), requireApprovedDoctor, attachBranchContext,
 router.post(
   '/process-due',
   authorize('doctor'),
+  requireApprovedDoctor,
+  processDueLimiter,
   runReminderPass
 );
 

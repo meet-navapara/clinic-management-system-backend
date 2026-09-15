@@ -75,10 +75,17 @@ export const signConsent = asyncHandler(async (req, res) => {
     return res.status(400).json({ success: false, message: 'This consent is already completed.' });
   }
   const status = req.body.status === 'rejected' ? 'rejected' : 'accepted';
+  const signature = String(req.body.signatureDataUrl || '');
+  if (signature && !signature.startsWith('data:image/')) {
+    return res.status(400).json({ success: false, message: 'Signature must be an image data URL.' });
+  }
+  if (signature.length > 200000) {
+    return res.status(400).json({ success: false, message: 'Signature image is too large.' });
+  }
   record.status = status;
   record.signedAt = new Date();
-  record.signatureDataUrl = req.body.signatureDataUrl || '';
-  record.signerName = req.body.signerName || '';
+  record.signatureDataUrl = signature;
+  record.signerName = String(req.body.signerName || '').slice(0, 120);
   record.ipAddress = req.ip || '';
   await record.save();
 

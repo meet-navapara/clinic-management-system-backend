@@ -9,6 +9,25 @@ import QueueTicket from '../models/QueueTicket.js';
 import Appointment from '../models/Appointment.js';
 import { asyncHandler } from '../middleware/access.js';
 import { clinicQuery, assertSameClinic, assertBranchAccess } from '../utils/branchScope.js';
+import { sanitizePrintHtml, PRINT_HTML_FIELDS } from '../utils/sanitizeHtml.js';
+import { uploadImageBuffer } from '../utils/cloudinary.js';
+
+const isHttpUrl = (value) => /^https?:\/\//i.test(String(value || '').trim());
+const isDataUrl = (value) => String(value || '').startsWith('data:image/');
+
+function sanitizeImageField(value, fieldName) {
+  if (value === undefined) return undefined;
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (isHttpUrl(raw)) return raw;
+  // Keep small legacy data URLs so existing clinics don't break; block huge payloads.
+  if (isDataUrl(raw) && raw.length <= 120000) return raw;
+  const err = new Error(
+    `${fieldName} must be uploaded via Cloudinary. Use the Upload button, then Save.`
+  );
+  err.status = 400;
+  throw err;
+}
 
 const ALLOWED_UPDATE = [
   'logo',
@@ -17,6 +36,7 @@ const ALLOWED_UPDATE = [
   'phone',
   'email',
   'website',
+  'appointmentPhone',
   'registrationNumber',
   'gstNumber',
   'taxLabel',
@@ -24,6 +44,8 @@ const ALLOWED_UPDATE = [
   'footerText',
   'headerHtml',
   'footerHtml',
+  'leftContentHtml',
+  'rightContentHtml',
   'terms',
   'includeHeader',
   'includeFooter',
@@ -56,13 +78,16 @@ const brandingFrom = (clinic, settings) => ({
   phone: settings?.phone || clinic?.phone || '',
   email: settings?.email || clinic?.email || '',
   website: settings?.website || clinic?.website || '',
+  appointmentPhone: settings?.appointmentPhone || '',
   registrationNumber: settings?.registrationNumber || clinic?.registrationNumber || '',
   gstNumber: settings?.gstNumber || clinic?.gstNumber || '',
   taxLabel: settings?.taxLabel || 'GST',
   headerText: settings?.headerText || '',
   footerText: settings?.footerText || '',
-  headerHtml: settings?.headerHtml || '',
-  footerHtml: settings?.footerHtml || '',
+  headerHtml: sanitizePrintHtml(settings?.headerHtml || ''),
+  footerHtml: sanitizePrintHtml(settings?.footerHtml || ''),
+  leftContentHtml: sanitizePrintHtml(settings?.leftContentHtml || ''),
+  rightContentHtml: sanitizePrintHtml(settings?.rightContentHtml || ''),
   terms: settings?.terms || '',
   includeHeader: settings?.includeHeader !== false,
   includeFooter: settings?.includeFooter !== false,
@@ -109,18 +134,95 @@ export const updatePrintSettings = asyncHandler(async (req, res) => {
   const clinicId = req.user.clinicId;
   const patch = { clinicId };
   for (const key of ALLOWED_UPDATE) {
-    if (req.body[key] !== undefined) patch[key] = req.body[key];
+    if (req.body[key] === undefined) continue;
+    if (key === 'logo' || key === 'signatureImage') {
+      patch[key] = sanitizeImageField(req.body[key], key === 'logo' ? 'Logo' : 'Signature image');
+      continue;
+    }
+    if (PRINT_HTML_FIELDS.includes(key)) {
+      patch[key] = sanitizePrintHtml(req.body[key]);
+      continue;
+    }
+    patch[key] = req.body[key];
   }
   const settings = await PrintSettings.findOneAndUpdate({ clinicId }, { $set: patch }, {
     new: true,
     upsert: true,
     setDefaultsOnInsert: true,
   });
+  if (patch.logo !== undefined && isHttpUrl(patch.logo)) {
+    await Clinic.findByIdAndUpdate(clinicId, { $set: { logo: patch.logo } }).catch(() => {});
+  }
   const clinic = await Clinic.findById(clinicId);
   res.json({
     success: true,
     settings: brandingFrom(clinic, settings),
     message: 'Print settings saved',
+  });
+});
+
+export const uploadPrintAsset = asyncHandler(async (req, res) => {
+  const kind = String(req.body.kind || req.query.kind || '').toLowerCase();
+  if (!['logo', 'signature'].includes(kind)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Upload kind must be "logo" or "signature".',
+    });
+  }
+  if (!req.file?.buffer) {
+    return res.status(400).json({ success: false, message: 'Choose an image file to upload.' });
+  }
+
+  const clinicId = String(req.user.clinicId);
+  const folder = `clinic-management/${clinicId}/print`;
+  const publicId = kind === 'logo' ? 'clinic-logo' : 'doctor-signature';
+  const result = await uploadImageBuffer(req.file.buffer, { folder, publicId });
+  const url = result.secure_url;
+
+  const field = kind === 'logo' ? 'logo' : 'signatureImage';
+  const settings = await PrintSettings.findOneAndUpdate(
+    { clinicId: req.user.clinicId },
+    { $set: { clinicId: req.user.clinicId, [field]: url } },
+    { new: true, upsert: true, setDefaultsOnInsert: true }
+  );
+
+  if (kind === 'logo') {
+    await Clinic.findByIdAndUpdate(clinicId, { $set: { logo: url } }).catch(() => {});
+  }
+
+  const clinic = await Clinic.findById(clinicId);
+  res.json({
+    success: true,
+    kind,
+    url,
+    settings: brandingFrom(clinic, settings),
+    message: kind === 'logo' ? 'Logo uploaded.' : 'Signature uploaded.',
+  });
+});
+
+export const printPreview = asyncHandler(async (req, res) => {
+  const clinic = await Clinic.findById(req.user.clinicId);
+  const settings = await PrintSettings.findOne({ clinicId: req.user.clinicId });
+  const branding = brandingFrom(clinic, settings);
+  res.json({
+    success: true,
+    type: 'preview',
+    branding,
+    preview: {
+      title: 'Print preview',
+      patientName: 'Sample Patient',
+      doctorName: req.user.name || 'Doctor',
+      dateLabel: new Date().toLocaleDateString('en-IN', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+      }),
+      lines: [
+        'This is a sample document using your saved letterhead, logo, margins, and signatures.',
+        'Use Print / Save PDF to check how invoices, prescriptions, and slips will look.',
+        'Edit Print Settings, then reopen this preview to verify changes.',
+      ],
+    },
   });
 });
 

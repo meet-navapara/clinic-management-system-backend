@@ -279,7 +279,8 @@ export const refundPayment = asyncHandler(async (req, res) => {
   });
 
   await refreshInvoicePayment(invoice);
-  if (invoice.paymentStatus === 'refunded' || req.body.reverseStock) {
+  // Only reverse inventory on a full refund — partial refunds must not restock.
+  if (invoice.paymentStatus === 'refunded') {
     await reverseInvoiceStock(invoice, req.user._id, 'Payment refunded');
   }
 

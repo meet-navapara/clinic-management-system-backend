@@ -1,6 +1,6 @@
 import Clinic from '../models/Clinic.js';
 
-/** Public list of active clinics (for staff/patient signup association). */
+/** Public list of active clinics (Super Admin only via route). */
 export const listClinics = async (req, res) => {
   try {
     const clinics = await Clinic.find({ isActive: true })
@@ -15,6 +15,11 @@ export const listClinics = async (req, res) => {
 
 export const getClinicById = async (req, res) => {
   try {
+    const isSuper = req.user.role === 'super_admin';
+    if (!isSuper && String(req.user.clinicId) !== String(req.params.id)) {
+      return res.status(403).json({ success: false, message: 'Not authorized to view this clinic.' });
+    }
+
     const clinic = await Clinic.findOne({ _id: req.params.id, isActive: true }).select(
       'name slug address phone email logo appointmentDuration reminderSettings workingHours'
     );

@@ -4,20 +4,23 @@ import { refreshCampaignCounts } from '../utils/comms/campaignSend.js';
 import { asyncHandler } from '../middleware/access.js';
 
 /**
- * MSG91 / generic delivery webhook.
- * Protect with WEBHOOK_SHARED_SECRET query/header when configured.
+ * MSG91 / generic delivery webhook — fail closed when secret is not configured.
  */
 export const msg91Webhook = asyncHandler(async (req, res) => {
   const secret = process.env.COMMS_WEBHOOK_SECRET || process.env.MSG91_WEBHOOK_SECRET;
-  if (secret) {
-    const provided =
-      req.headers['x-webhook-secret'] ||
-      req.headers['x-msg91-secret'] ||
-      req.query.secret ||
-      '';
-    if (provided !== secret) {
-      return res.status(401).json({ success: false, message: 'Invalid webhook secret.' });
-    }
+  if (!secret) {
+    return res.status(503).json({
+      success: false,
+      message: 'Webhook secret is not configured. Refusing requests.',
+    });
+  }
+  const provided =
+    req.headers['x-webhook-secret'] ||
+    req.headers['x-msg91-secret'] ||
+    req.query.secret ||
+    '';
+  if (provided !== secret) {
+    return res.status(401).json({ success: false, message: 'Invalid webhook secret.' });
   }
 
   const body = req.body || {};
@@ -63,15 +66,19 @@ export const msg91Webhook = asyncHandler(async (req, res) => {
 });
 
 /**
- * Resend email webhook (svix signature optional — require shared secret in this deployment).
+ * Resend email webhook — fail closed when secret is not configured.
  */
 export const resendWebhook = asyncHandler(async (req, res) => {
   const secret = process.env.COMMS_WEBHOOK_SECRET || process.env.RESEND_WEBHOOK_SECRET;
-  if (secret) {
-    const provided = req.headers['x-webhook-secret'] || req.query.secret || '';
-    if (provided !== secret) {
-      return res.status(401).json({ success: false, message: 'Invalid webhook secret.' });
-    }
+  if (!secret) {
+    return res.status(503).json({
+      success: false,
+      message: 'Webhook secret is not configured. Refusing requests.',
+    });
+  }
+  const provided = req.headers['x-webhook-secret'] || req.query.secret || '';
+  if (provided !== secret) {
+    return res.status(401).json({ success: false, message: 'Invalid webhook secret.' });
   }
 
   const event = req.body || {};

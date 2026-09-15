@@ -2,17 +2,42 @@ import { Router } from 'express';
 import { protect } from '../middleware/auth.js';
 import { attachBranchContext, requirePermission, requireClinicUser, asyncHandler } from '../middleware/access.js';
 import { P } from '../utils/permissions.js';
-import { getPrintSettings, updatePrintSettings, printPayload } from '../controllers/printController.js';
+import {
+  getPrintSettings,
+  updatePrintSettings,
+  uploadPrintAsset,
+  printPreview,
+  printPayload,
+} from '../controllers/printController.js';
 import { globalSearch } from '../controllers/searchController.js';
 import AuditLog from '../models/AuditLog.js';
 import { tenantFilter } from '../utils/branchScope.js';
 import { parsePagination, paginated } from '../utils/pagination.js';
+import { uploadPrintImage } from '../middleware/uploadPrintImage.js';
 
 const router = Router();
 router.use(protect, requireClinicUser, attachBranchContext);
 
 router.get('/print/settings', requirePermission(P.PRINT_SETTINGS, P.BILLING_VIEW, P.CONSULTATION), getPrintSettings);
 router.put('/print/settings', requirePermission(P.PRINT_SETTINGS), updatePrintSettings);
+router.post(
+  '/print/settings/upload',
+  requirePermission(P.PRINT_SETTINGS),
+  (req, res, next) => {
+    uploadPrintImage(req, res, (err) => {
+      if (err) {
+        return res.status(400).json({ success: false, message: err.message || 'Upload failed.' });
+      }
+      next();
+    });
+  },
+  uploadPrintAsset
+);
+router.get(
+  '/print/preview',
+  requirePermission(P.PRINT_SETTINGS, P.BILLING_VIEW, P.CONSULTATION, P.QUEUE_MANAGE, P.CONSENT_CAPTURE),
+  printPreview
+);
 router.get('/print/:type/:id', requirePermission(P.BILLING_VIEW, P.CONSULTATION, P.QUEUE_MANAGE, P.CONSENT_CAPTURE), printPayload);
 router.get('/search', requirePermission(P.SEARCH), globalSearch);
 

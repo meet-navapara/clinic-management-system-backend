@@ -101,8 +101,20 @@ export const createStaff = asyncHandler(async (req, res) => {
   }
 
   const enableLogin = isDoctor ? true : Boolean(loginEnabled);
-  if (enableLogin && !isDoctor && (!password || String(password).length < 6)) {
-    return res.status(400).json({ success: false, message: 'Set a password of at least 6 characters to enable login.' });
+  if (enableLogin && (!password || String(password).length < 6)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Set a password of at least 6 characters to enable login.',
+    });
+  }
+  if (isDoctor && (!password || String(password).length < 6)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Doctors require a password of at least 6 characters.',
+    });
+  }
+  if (!phone || String(phone).trim().length < 8) {
+    return res.status(400).json({ success: false, message: 'A valid phone number is required.' });
   }
 
   const existing = await User.findOne({ email: String(email).toLowerCase() });
@@ -128,11 +140,17 @@ export const createStaff = asyncHandler(async (req, res) => {
     return res.status(400).json({ success: false, message: 'Assign this staff member to a branch.' });
   }
 
+  // Non-login staff still need a stored password hash — use a random unusable secret.
+  const crypto = await import('crypto');
+  const passwordToStore =
+    password ||
+    crypto.randomBytes(24).toString('base64url');
+
   const user = await User.create({
     name,
     email,
-    password: password || 'ChangeMe@123',
-    phone: phone || '0000000000',
+    password: passwordToStore,
+    phone: String(phone).trim(),
     role: storedRoleForStaffType(type),
     staffType: isDoctor ? '' : type,
     clinicId: req.user.clinicId,
@@ -144,7 +162,8 @@ export const createStaff = asyncHandler(async (req, res) => {
     staffStatus: 'active',
     isActive: true,
     loginEnabled: enableLogin,
-    approvalStatus: 'approved',
+    // Doctors created via staff must be approved by Super Admin before dashboard access.
+    approvalStatus: isDoctor ? 'pending' : 'approved',
   });
 
   await writeAudit({
@@ -203,10 +222,16 @@ export const updateStaff = asyncHandler(async (req, res) => {
 
   const nextType = req.body.staffType || req.body.role;
   if (nextType === 'doctor') {
+    const wasDoctor = user.role === 'doctor';
     user.role = 'doctor';
     user.staffType = '';
     user.loginEnabled = true;
-    user.approvalStatus = user.approvalStatus || 'approved';
+    // Promoting staff → doctor requires Super Admin approval (do not auto-approve).
+    if (!wasDoctor) {
+      user.approvalStatus = 'pending';
+      user.isActive = true;
+      user.staffStatus = 'active';
+    }
   } else if (nextType && STAFF_TYPES.includes(nextType) && user.role !== 'doctor') {
     user.staffType = nextType;
     user.role = storedRoleForStaffType(nextType);

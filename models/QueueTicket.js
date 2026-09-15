@@ -32,6 +32,14 @@ const queueTicketSchema = new mongoose.Schema(
 
 queueTicketSchema.index({ clinicId: 1, branchId: 1, queueDate: 1, tokenNumber: 1 }, { unique: true });
 queueTicketSchema.index({ clinicId: 1, branchId: 1, doctorId: 1, status: 1 });
+// One active check-in per patient per branch per day (race-safe with unique + catch duplicate).
+queueTicketSchema.index(
+  { clinicId: 1, branchId: 1, patientId: 1, queueDate: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { status: { $in: ['waiting', 'called', 'in_consultation'] } },
+  }
+);
 
 const QueueTicket = mongoose.model('QueueTicket', queueTicketSchema);
 export default QueueTicket;

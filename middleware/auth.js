@@ -1,13 +1,10 @@
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
+import { readAuthToken } from '../utils/authCookie.js';
 
 export const protect = async (req, res, next) => {
   try {
-    let token;
-
-    if (req.headers.authorization?.startsWith('Bearer')) {
-      token = req.headers.authorization.split(' ')[1];
-    }
+    const token = readAuthToken(req);
 
     if (!token) {
       return res.status(401).json({ success: false, message: 'Not authorized. Please login.' });

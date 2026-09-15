@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import User from '../models/User.js';
 import Clinic from '../models/Clinic.js';
 import generateToken from '../utils/generateToken.js';
+import { setAuthCookie, clearAuthCookie } from '../utils/authCookie.js';
 import { toAuthUser } from '../utils/authUser.js';
 import { isStaffAccount } from '../utils/permissions.js';
 import { assertStaffBranchOperational } from '../utils/branchScope.js';
@@ -155,6 +156,7 @@ export const registerClinicAdmin = async (req, res) => {
     });
 
     const token = generateToken(user._id);
+    setAuthCookie(res, token);
 
     res.status(201).json({
       success: true,
@@ -168,8 +170,8 @@ export const registerClinicAdmin = async (req, res) => {
 };
 
 /**
- * Doctor self-registration (multi-doctor). Existing doctors remain role=doctor.
- * Optional setupKey is accepted for backward compatibility but is not required.
+ * Doctor self-registration.
+ * Creating a new clinic or joining an existing one requires ADMIN_SETUP_SECRET.
  */
 export const registerDoctor = async (req, res) => {
   try {
@@ -197,9 +199,7 @@ export const registerDoctor = async (req, res) => {
       setupKey,
     } = req.body;
 
-    if (setupKey) {
-      if (!assertSetupKey(setupKey, res)) return;
-    }
+    if (!assertSetupKey(setupKey, res)) return;
 
     const contactErrors = await uniqueContactErrors(email, phone);
     if (Object.keys(contactErrors).length) {
@@ -283,6 +283,7 @@ export const registerDoctor = async (req, res) => {
     });
 
     const token = generateToken(user._id);
+    setAuthCookie(res, token);
 
     res.status(201).json({
       success: true,
@@ -420,6 +421,7 @@ export const login = async (req, res) => {
     }
 
     const token = generateToken(user._id);
+    setAuthCookie(res, token);
 
     res.json({
       success: true,
@@ -506,6 +508,104 @@ export const updateProfile = async (req, res) => {
     }).select('-password');
 
     res.json({ success: true, message: 'Profile updated.', user: toAuthUser(user) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const logout = async (_req, res) => {
+  clearAuthCookie(res);
+  res.json({ success: true, message: 'Logged out.' });
+};
+
+export const forgotPassword = async (req, res) => {
+  try {
+    const email = normalizeEmail(req.body.email);
+    const generic = {
+      success: true,
+      message: 'If that email is registered, a reset link has been sent.',
+    };
+    if (!email) return res.json(generic);
+
+    const user = await User.findOne({ email });
+    if (!user || user.role === 'patient') return res.json(generic);
+
+    const crypto = await import('crypto');
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    const hashed = crypto.createHash('sha256').update(rawToken).digest('hex');
+    user.passwordResetToken = hashed;
+    user.passwordResetExpires = new Date(Date.now() + 60 * 60 * 1000);
+    await user.save({ validateBeforeSave: false });
+
+    const clientOrigin = (process.env.CLIENT_ORIGINS || process.env.CLIENT_ORIGIN || 'http://localhost:3000')
+      .split(',')[0]
+      .trim();
+    const resetUrl = `${clientOrigin}/reset-password?token=${rawToken}`;
+
+    try {
+      const { sendEmailMessage } = await import('../utils/comms/providers.js');
+      await sendEmailMessage({
+        toEmail: user.email,
+        subject: 'Reset your clinic password',
+        text: `Reset your password using this link (valid 1 hour):\n\n${resetUrl}\n\nIf you did not request this, ignore this email.`,
+        html: `<p>Reset your password using this link (valid 1 hour):</p><p><a href="${resetUrl}">${resetUrl}</a></p><p>If you did not request this, ignore this email.</p>`,
+      });
+    } catch (err) {
+      // Clear token if email cannot be sent so attackers cannot fish valid tokens offline.
+      user.passwordResetToken = undefined;
+      user.passwordResetExpires = undefined;
+      await user.save({ validateBeforeSave: false });
+      if (!process.env.RESEND_API_KEY || !process.env.EMAIL_FROM) {
+        return res.status(503).json({
+          success: false,
+          message: 'Password reset email is not configured. Contact your administrator.',
+        });
+      }
+      return res.status(502).json({
+        success: false,
+        message: err.message || 'Failed to send reset email.',
+      });
+    }
+
+    return res.json(generic);
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Something went wrong. Please try again.' });
+  }
+};
+
+export const resetPassword = async (req, res) => {
+  try {
+    const { token, password } = req.body;
+    if (!token || !password || String(password).length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: 'A valid reset token and password (min 6 characters) are required.',
+      });
+    }
+    const crypto = await import('crypto');
+    const hashed = crypto.createHash('sha256').update(String(token)).digest('hex');
+    const user = await User.findOne({
+      passwordResetToken: hashed,
+      passwordResetExpires: { $gt: new Date() },
+    }).select('+password');
+
+    if (!user) {
+      return res.status(400).json({ success: false, message: 'Reset link is invalid or has expired.' });
+    }
+
+    user.password = password;
+    user.passwordResetToken = undefined;
+    user.passwordResetExpires = undefined;
+    await user.save();
+
+    const jwtToken = generateToken(user._id);
+    setAuthCookie(res, jwtToken);
+    res.json({
+      success: true,
+      message: 'Password updated. You are now signed in.',
+      token: jwtToken,
+      user: toAuthUser(user),
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

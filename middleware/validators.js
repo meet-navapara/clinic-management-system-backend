@@ -72,7 +72,7 @@ export const clinicAdminRegisterValidation = [
 
 export const doctorRegisterValidation = [
   ...registerValidation,
-  body('setupKey').optional().trim(),
+  body('setupKey').trim().notEmpty().withMessage('Admin setup key is required'),
   body('clinicId').optional().isMongoId().withMessage('Valid clinic is required'),
   body('clinicName')
     .optional({ values: 'falsy' })

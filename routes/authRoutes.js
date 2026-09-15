@@ -6,8 +6,11 @@ import {
   registerReceptionist,
   getSetupStatus,
   login,
+  logout,
   getMe,
   updateProfile,
+  forgotPassword,
+  resetPassword,
 } from '../controllers/authController.js';
 import { protect } from '../middleware/auth.js';
 import { uploadProfilePhoto } from '../middleware/uploadProfilePhoto.js';
@@ -19,7 +22,7 @@ import {
   loginValidation,
   handleValidation,
 } from '../middleware/validators.js';
-import { authLimiter, loginLimiter } from '../middleware/rateLimit.js';
+import { authLimiter, loginLimiter, passwordResetLimiter } from '../middleware/rateLimit.js';
 
 const router = Router();
 
@@ -47,6 +50,9 @@ router.post(
   registerReceptionist
 );
 router.post('/login', loginLimiter, loginValidation, handleValidation, login);
+router.post('/logout', logout);
+router.post('/forgot-password', passwordResetLimiter, forgotPassword);
+router.post('/reset-password', passwordResetLimiter, resetPassword);
 router.get('/me', protect, getMe);
 router.put('/profile', protect, (req, res, next) => {
   uploadProfilePhoto(req, res, (err) => {

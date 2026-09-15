@@ -109,7 +109,7 @@ export async function deductInvoiceStock(invoice, userId) {
 }
 
 export async function reverseInvoiceStock(invoice, userId, reason = 'Invoice cancelled/refunded') {
-  if (!invoice?.inventoryDeducted) return;
+  if (!invoice?.inventoryDeducted) return { reversed: false };
   const medicineLines = (invoice.items || []).filter((i) => i.type === 'medicine' && i.medicineId && i.quantity > 0);
   for (const line of medicineLines) {
     await applyStockChange({
@@ -126,6 +126,9 @@ export async function reverseInvoiceStock(invoice, userId, reason = 'Invoice can
       performedBy: userId,
     });
   }
+  invoice.inventoryDeducted = false;
+  await invoice.save();
+  return { reversed: true };
 }
 
 export async function medicineStockByBranch(clinicId, branchId, medicineIds, extraMatch = {}) {

@@ -95,19 +95,37 @@ export const checkIn = asyncHandler(async (req, res) => {
   const branch = await Branch.findById(req.branchId);
   const seq = await nextSequence(`queue:${req.branchId}:${date.toISOString().slice(0, 10)}`);
   const prefix = branch?.tokenPrefix || '';
-  const ticket = await QueueTicket.create({
-    clinicId: patient.clinicId,
-    branchId: req.branchId,
-    doctorId: doctorId || patient.doctorId,
-    patientId: patient._id,
-    appointmentId: appointmentId || null,
-    tokenNumber: seq,
-    tokenLabel: `${prefix}${seq}`,
-    roomLabel: branch?.roomLabel || '',
-    status: 'waiting',
-    queueDate: date,
-    createdBy: req.user._id,
-  });
+  let ticket;
+  try {
+    ticket = await QueueTicket.create({
+      clinicId: patient.clinicId,
+      branchId: req.branchId,
+      doctorId: doctorId || patient.doctorId,
+      patientId: patient._id,
+      appointmentId: appointmentId || null,
+      tokenNumber: seq,
+      tokenLabel: `${prefix}${seq}`,
+      roomLabel: branch?.roomLabel || '',
+      status: 'waiting',
+      queueDate: date,
+      createdBy: req.user._id,
+    });
+  } catch (err) {
+    if (err?.code === 11000) {
+      const raced = await QueueTicket.findOne({
+        clinicId: patient.clinicId,
+        branchId: req.branchId,
+        patientId: patient._id,
+        queueDate: date,
+        status: { $in: ['waiting', 'called', 'in_consultation'] },
+      });
+      if (raced) {
+        await raced.populate(POPULATE);
+        return res.json({ success: true, ticket: raced, alreadyCheckedIn: true });
+      }
+    }
+    throw err;
+  }
 
   if (appointmentId) {
     await Appointment.findByIdAndUpdate(appointmentId, { status: 'confirmed' }).catch(() => {});
@@ -172,11 +190,13 @@ export const callNext = asyncHandler(async (req, res) => {
     { $set: { status: 'waiting' } }
   );
 
-  const next = await QueueTicket.findOne(filter).sort({ tokenNumber: 1 });
+  // Atomic claim — prevents two counters from calling the same waiting ticket.
+  const next = await QueueTicket.findOneAndUpdate(
+    filter,
+    { $set: { status: 'called', calledAt: new Date() } },
+    { sort: { tokenNumber: 1 }, new: true }
+  );
   if (!next) return res.status(404).json({ success: false, message: 'No patients waiting.' });
-  next.status = 'called';
-  next.calledAt = new Date();
-  await next.save();
   await next.populate(POPULATE);
   res.json({ success: true, ticket: next });
 });

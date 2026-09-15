@@ -23,6 +23,18 @@ const safeClientError = (error, fallback = 'Something went wrong. Please try aga
   return fallback;
 };
 
+/** Accept Cloudinary/http URLs or small data URLs; reject oversized payloads. */
+const sanitizePatientPhoto = (value) => {
+  if (value == null || value === '') return '';
+  const raw = String(value).trim();
+  if (!raw) return '';
+  if (/^https?:\/\//i.test(raw)) return raw.slice(0, 2048);
+  if (raw.startsWith('data:image/') && raw.length <= 120000) return raw;
+  const err = new Error('Profile photo must be an uploaded image URL.');
+  err.status = 400;
+  throw err;
+};
+
 const buildDisplayName = ({ firstName, middleName, lastName, preferredName, name }) => {
   if (name?.trim()) return name.trim();
   const parts = [firstName, middleName, lastName].filter((p) => p?.trim());
@@ -243,7 +255,7 @@ export const createPatient = async (req, res) => {
       linkedPatientName: body.linkedPatientName || '',
       sendSms: body.sendSms !== undefined ? Boolean(body.sendSms) : true,
       admitPatient: Boolean(body.admitPatient),
-      profilePhoto: body.profilePhoto || '',
+      profilePhoto: sanitizePatientPhoto(body.profilePhoto),
       emergencyContact: {
         name: body.emergencyContactName || body.emergencyContact?.name || '',
         relationship:
@@ -422,7 +434,12 @@ export const updatePatient = async (req, res) => {
     ];
 
     for (const field of fields) {
-      if (body[field] !== undefined) patient[field] = body[field];
+      if (body[field] === undefined) continue;
+      if (field === 'profilePhoto') {
+        patient.profilePhoto = sanitizePatientPhoto(body.profilePhoto);
+        continue;
+      }
+      patient[field] = body[field];
     }
 
     if (body.sendSms !== undefined) patient.sendSms = Boolean(body.sendSms);
