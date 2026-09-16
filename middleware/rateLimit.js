@@ -29,6 +29,8 @@ export const apiLimiter = rateLimit({
   max: 300,
   standardHeaders: true,
   legacyHeaders: false,
+  // Vercel sits behind a proxy; avoid hard-fail validation crashes
+  validate: { xForwardedForHeader: false },
   message: jsonMessage('Too many requests. Please try again later.'),
 });
 

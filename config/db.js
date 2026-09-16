@@ -59,17 +59,23 @@ export const cleanupOrphanAppointments = async () => {
 };
 
 const connectDB = async () => {
-  dns.setServers(['8.8.8.8', '1.1.1.1']);
+  // Custom DNS can break on some serverless hosts
+  if (!process.env.VERCEL) {
+    dns.setServers(['8.8.8.8', '1.1.1.1']);
+  }
 
   try {
     const conn = await mongoose.connect(process.env.MONGODB_URI, {
       serverSelectionTimeoutMS: 15000,
     });
     console.log(`MongoDB connected: ${conn.connection.host}`);
-    await migrateClinicTenancy();
-    await migrateDoctorApprovals();
-    await migrateAppointmentIndexes();
-    await cleanupOrphanAppointments();
+    // Skip heavy scans on Vercel cold starts
+    if (!process.env.VERCEL) {
+      await migrateClinicTenancy();
+      await migrateDoctorApprovals();
+      await migrateAppointmentIndexes();
+      await cleanupOrphanAppointments();
+    }
   } catch (error) {
     console.error(`MongoDB connection error: ${error.message}`);
     // process.exit kills the whole Vercel serverless isolate — throw instead there

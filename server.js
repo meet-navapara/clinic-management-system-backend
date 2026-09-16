@@ -43,11 +43,16 @@ if (!process.env.JWT_SECRET) {
   if (!isVercel) process.exit(1);
 }
 
+if (!process.env.MONGODB_URI && isVercel) {
+  console.error('MONGODB_URI is not set on Vercel.');
+}
+
 let dbReady = null;
 export function ensureDb() {
   if (!dbReady) {
     dbReady = connectDB()
       .then(async () => {
+        if (isVercel) return;
         try {
           await migratePracticeDomain();
         } catch (err) {
@@ -74,8 +79,7 @@ export function ensureDb() {
         } catch (err) {
           console.warn('EmailOtp index sync skipped:', err.message);
         }
-        // In-process intervals are not reliable on Vercel serverless
-        if (!isVercel) startReminderScheduler();
+        startReminderScheduler();
       })
       .catch((err) => {
         dbReady = null;
@@ -139,25 +143,30 @@ app.use(
   })
 );
 
-// Ensure DB is connected before handling API traffic (needed on serverless cold starts)
+// Health check first — no DB required (useful to verify Vercel deploy)
+app.get('/api/health', (_req, res) => {
+  res.json({ success: true, message: 'Shreeshakti Ayurveda API is running.' });
+});
+
 app.use(async (req, res, next) => {
+  // Health already handled above
+  if (req.path === '/api/health') return next();
   try {
     await ensureDb();
     next();
   } catch (err) {
     console.error('DB ready error:', err.message);
-    res.status(503).json({ success: false, message: 'Database unavailable. Please try again.' });
+    res.status(503).json({
+      success: false,
+      message: 'Database unavailable. Please try again.',
+      detail: process.env.NODE_ENV === 'production' ? undefined : err.message,
+    });
   }
 });
 
 app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser());
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/api', apiLimiter);
-
-app.get('/api/health', (req, res) => {
-  res.json({ success: true, message: 'Shreeshakti Ayurveda API is running.' });
-});
 
 app.use('/api/auth', authRoutes);
 app.use('/api/clinics', clinicRoutes);
@@ -193,7 +202,6 @@ app.use((err, req, res, next) => {
 });
 
 if (!isVercel) {
-  // Kick off DB + migrations for local / long-running hosts
   ensureDb().catch((err) => {
     console.error('Failed to connect DB on startup:', err.message);
   });
