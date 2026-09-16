@@ -36,40 +36,54 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.resolve(__dirname, '.env') });
 
+const isVercel = Boolean(process.env.VERCEL);
+
 if (!process.env.JWT_SECRET) {
   console.error('JWT_SECRET is not set. Refusing to start.');
-  process.exit(1);
+  if (!isVercel) process.exit(1);
 }
 
-connectDB().then(async () => {
-  try {
-    await migratePracticeDomain();
-  } catch (err) {
-    console.warn('Practice domain migrate skipped:', err.message);
+let dbReady = null;
+export function ensureDb() {
+  if (!dbReady) {
+    dbReady = connectDB()
+      .then(async () => {
+        try {
+          await migratePracticeDomain();
+        } catch (err) {
+          console.warn('Practice domain migrate skipped:', err.message);
+        }
+        try {
+          await migrateV2Foundation();
+        } catch (err) {
+          console.warn('V2 foundation migrate skipped:', err.message);
+        }
+        try {
+          await migrateAuthRoles();
+        } catch (err) {
+          console.warn('Auth role migrate skipped:', err.message);
+        }
+        try {
+          await migrateDoctorClinicIsolation();
+        } catch (err) {
+          console.warn('Doctor clinic isolation migrate skipped:', err.message);
+        }
+        try {
+          const EmailOtp = (await import('./models/EmailOtp.js')).default;
+          await EmailOtp.syncIndexes();
+        } catch (err) {
+          console.warn('EmailOtp index sync skipped:', err.message);
+        }
+        // In-process intervals are not reliable on Vercel serverless
+        if (!isVercel) startReminderScheduler();
+      })
+      .catch((err) => {
+        dbReady = null;
+        throw err;
+      });
   }
-  try {
-    await migrateV2Foundation();
-  } catch (err) {
-    console.warn('V2 foundation migrate skipped:', err.message);
-  }
-  try {
-    await migrateAuthRoles();
-  } catch (err) {
-    console.warn('Auth role migrate skipped:', err.message);
-  }
-  try {
-    await migrateDoctorClinicIsolation();
-  } catch (err) {
-    console.warn('Doctor clinic isolation migrate skipped:', err.message);
-  }
-  try {
-    const EmailOtp = (await import('./models/EmailOtp.js')).default;
-    await EmailOtp.syncIndexes();
-  } catch (err) {
-    console.warn('EmailOtp index sync skipped:', err.message);
-  }
-  startReminderScheduler();
-});
+  return dbReady;
+}
 
 const app = express();
 
@@ -91,18 +105,17 @@ const defaultOrigins = [
   'http://127.0.0.1:5173',
   'http://localhost:4173',
   'http://127.0.0.1:4173',
+  'https://clinic-management-system-frontend-q7r9zpcd1.vercel.app',
 ];
 const configuredOrigins = String(process.env.CLIENT_ORIGINS || process.env.CLIENT_ORIGIN || '')
   .split(',')
   .map((s) => s.trim().replace(/\/$/, ''))
   .filter(Boolean);
-// Always keep local defaults + any production origins from env
 const allowedOrigins = [...new Set([...defaultOrigins, ...configuredOrigins])];
 
 function isAllowedOrigin(origin) {
   if (!origin) return true;
   if (allowedOrigins.includes(origin)) return true;
-  // Vercel frontend / preview deployments
   try {
     const { protocol, hostname } = new URL(origin);
     if (protocol === 'https:' && (hostname === 'vercel.app' || hostname.endsWith('.vercel.app'))) {
@@ -118,11 +131,24 @@ app.use(
   cors({
     origin(origin, callback) {
       if (isAllowedOrigin(origin)) return callback(null, true);
-      return callback(new Error(`CORS blocked for origin: ${origin}`));
+      return callback(null, false);
     },
     credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Branch-Id'],
   })
 );
+
+// Ensure DB is connected before handling API traffic (needed on serverless cold starts)
+app.use(async (req, res, next) => {
+  try {
+    await ensureDb();
+    next();
+  } catch (err) {
+    console.error('DB ready error:', err.message);
+    res.status(503).json({ success: false, message: 'Database unavailable. Please try again.' });
+  }
+});
 
 app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser());
@@ -166,15 +192,24 @@ app.use((err, req, res, next) => {
   res.status(500).json({ success: false, message: 'Something went wrong. Please try again.' });
 });
 
-const PORT = process.env.PORT || 5000;
-const server = app.listen(PORT, () => {
-  console.log(`Shreeshakti Ayurveda server running on port ${PORT}`);
-});
+if (!isVercel) {
+  // Kick off DB + migrations for local / long-running hosts
+  ensureDb().catch((err) => {
+    console.error('Failed to connect DB on startup:', err.message);
+  });
 
-server.on('error', (err) => {
-  if (err.code === 'EADDRINUSE') {
-    console.error(`Port ${PORT} is already in use. Stop the other process or change PORT in .env`);
-    process.exit(1);
-  }
-  throw err;
-});
+  const PORT = process.env.PORT || 5000;
+  const server = app.listen(PORT, () => {
+    console.log(`Shreeshakti Ayurveda server running on port ${PORT}`);
+  });
+
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`Port ${PORT} is already in use. Stop the other process or change PORT in .env`);
+      process.exit(1);
+    }
+    throw err;
+  });
+}
+
+export default app;

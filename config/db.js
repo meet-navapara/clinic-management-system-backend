@@ -72,6 +72,8 @@ const connectDB = async () => {
     await cleanupOrphanAppointments();
   } catch (error) {
     console.error(`MongoDB connection error: ${error.message}`);
+    // process.exit kills the whole Vercel serverless isolate — throw instead there
+    if (process.env.VERCEL) throw error;
     process.exit(1);
   }
 };
