@@ -94,17 +94,31 @@ const defaultOrigins = [
 ];
 const configuredOrigins = String(process.env.CLIENT_ORIGINS || process.env.CLIENT_ORIGIN || '')
   .split(',')
-  .map((s) => s.trim())
+  .map((s) => s.trim().replace(/\/$/, ''))
   .filter(Boolean);
-const allowedOrigins = configuredOrigins.length ? configuredOrigins : defaultOrigins;
+// Always keep local defaults + any production origins from env
+const allowedOrigins = [...new Set([...defaultOrigins, ...configuredOrigins])];
+
+function isAllowedOrigin(origin) {
+  if (!origin) return true;
+  if (allowedOrigins.includes(origin)) return true;
+  // Vercel frontend / preview deployments
+  try {
+    const { protocol, hostname } = new URL(origin);
+    if (protocol === 'https:' && (hostname === 'vercel.app' || hostname.endsWith('.vercel.app'))) {
+      return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
 
 app.use(
   cors({
     origin(origin, callback) {
-      // Allow non-browser / same-origin tools (no Origin header)
-      if (!origin) return callback(null, true);
-      if (allowedOrigins.includes(origin)) return callback(null, true);
-      return callback(null, false);
+      if (isAllowedOrigin(origin)) return callback(null, true);
+      return callback(new Error(`CORS blocked for origin: ${origin}`));
     },
     credentials: true,
   })
