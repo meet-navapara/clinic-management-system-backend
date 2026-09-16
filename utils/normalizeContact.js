@@ -1,6 +1,6 @@
 /**
- * Canonical Indian mobile: "+91 9876543210"
- * Accepts: 9876543210 | +919876543210 | +91 9876543210 | 919876543210 | 09876543210
+ * Canonical mobile: exactly 10 digits (Indian mobile starting 6–9).
+ * Accepts pasted forms with +91 / 0 prefix and returns digits only.
  */
 export function normalizeIndianMobile(input) {
   if (input == null || String(input).trim() === '') return null;
@@ -14,25 +14,23 @@ export function normalizeIndianMobile(input) {
   else return null;
 
   if (!/^[6-9]\d{9}$/.test(ten)) return null;
-  return `+91 ${ten}`;
+  return ten;
 }
 
-/** Digits-only form for WhatsApp / loose matching: 919876543210 */
+/** Digits for WhatsApp / MSG91: 919876543210 */
 export function indianMobileDigits(input) {
-  const normalized = normalizeIndianMobile(input);
-  if (!normalized) return null;
-  return normalized.replace(/\D/g, '');
+  const ten = normalizeIndianMobile(input);
+  if (!ten) return null;
+  return `91${ten}`;
 }
 
 export function phoneMatchVariants(input) {
-  const normalized = normalizeIndianMobile(input);
-  if (!normalized) return [];
-  const ten = normalized.replace(/\D/g, '').slice(-10);
+  const ten = normalizeIndianMobile(input);
+  if (!ten) return [];
   return [
-    normalized,
     ten,
-    `+91${ten}`,
     `+91 ${ten}`,
+    `+91${ten}`,
     `91${ten}`,
     `0${ten}`,
   ];

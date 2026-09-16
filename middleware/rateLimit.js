@@ -41,6 +41,15 @@ export const passwordResetLimiter = rateLimit({
   message: jsonMessage('Too many password reset attempts. Please try again later.'),
 });
 
+/** Email OTP send / verify */
+export const emailOtpLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: jsonMessage('Too many verification attempts. Please try again later.'),
+});
+
 /** Campaign send / test / retry — expensive provider calls */
 export const campaignSendLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,

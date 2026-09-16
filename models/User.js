@@ -132,6 +132,12 @@ const userSchema = new mongoose.Schema(
       default: 'approved',
       index: true,
     },
+    /** Set true when doctor completed email OTP before signup. */
+    emailVerified: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
     specialization: { type: String, trim: true, default: '' },
     qualification: { type: String, trim: true, default: '' },
     experience: { type: Number, default: 0 },

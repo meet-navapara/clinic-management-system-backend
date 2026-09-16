@@ -152,7 +152,7 @@ export const createPatient = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: !phone
-          ? 'Mobile number must be a valid 10-digit Indian number (+91).'
+          ? 'Mobile number must be exactly 10 digits.'
           : 'Name and phone are required.',
       });
     }
@@ -451,7 +451,7 @@ export const updatePatient = async (req, res) => {
       if (!phone) {
         return res.status(422).json({
           success: false,
-          message: 'Mobile number must be a valid 10-digit Indian number (+91).',
+          message: 'Mobile number must be exactly 10 digits.',
         });
       }
       patient.phone = phone;

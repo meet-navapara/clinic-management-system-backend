@@ -3,6 +3,7 @@ import DoctorNotification from '../models/DoctorNotification.js';
 import { processDueReminders } from '../utils/notificationService.js';
 import { tenantFilter } from '../utils/branchScope.js';
 import { getUnreadCount } from '../utils/doctorNotify.js';
+import { parsePagination, paginated } from '../utils/pagination.js';
 
 /** Patient reminder delivery logs (not the doctor inbox). */
 export const listMyNotifications = async (req, res) => {
@@ -22,19 +23,28 @@ export const listMyNotifications = async (req, res) => {
 
     if (req.query.status) filter.status = req.query.status;
 
-    const notifications = await NotificationLog.find(filter)
-      .sort({ scheduledAt: -1 })
-      .limit(100)
-      .populate({
-        path: 'appointmentId',
-        select: 'appointmentDate timeSlot status doctor patientId',
-        populate: [
-          { path: 'patientId', select: 'name phone patientCode' },
-          { path: 'doctor', select: 'name' },
-        ],
-      });
+    const { page, limit, skip } = parsePagination(req.query, { page: 1, limit: 20, max: 100 });
+    const [notifications, total] = await Promise.all([
+      NotificationLog.find(filter)
+        .sort({ scheduledAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .populate({
+          path: 'appointmentId',
+          select: 'appointmentDate timeSlot status doctor patientId',
+          populate: [
+            { path: 'patientId', select: 'name phone patientCode' },
+            { path: 'doctor', select: 'name' },
+          ],
+        }),
+      NotificationLog.countDocuments(filter),
+    ]);
 
-    res.json({ success: true, count: notifications.length, notifications });
+    res.json({
+      success: true,
+      ...paginated({ items: notifications, total, page, limit }),
+      notifications,
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -58,11 +68,19 @@ export const listDoctorInbox = async (req, res) => {
     if (req.user.role !== 'doctor') {
       return res.status(403).json({ success: false, message: 'Doctors only.' });
     }
-    const notifications = await DoctorNotification.find({ doctorId: req.user._id })
-      .sort({ createdAt: -1 })
-      .limit(100);
-    const unreadCount = await getUnreadCount(req.user._id);
-    res.json({ success: true, notifications, unreadCount });
+    const filter = { doctorId: req.user._id };
+    const { page, limit, skip } = parsePagination(req.query, { page: 1, limit: 20, max: 100 });
+    const [notifications, total, unreadCount] = await Promise.all([
+      DoctorNotification.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
+      DoctorNotification.countDocuments(filter),
+      getUnreadCount(req.user._id),
+    ]);
+    res.json({
+      success: true,
+      ...paginated({ items: notifications, total, page, limit }),
+      notifications,
+      unreadCount,
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

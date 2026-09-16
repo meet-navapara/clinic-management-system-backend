@@ -29,7 +29,7 @@ const phoneField = (field, { required = true } = {}) => {
   return chain.custom((value) => {
     if (!required && !value) return true;
     if (!normalizeIndianMobile(value)) {
-      throw new Error('Mobile number must be a valid 10-digit Indian number (+91).');
+      throw new Error('Mobile number must be exactly 10 digits.');
     }
     return true;
   }).customSanitizer((value) => {
@@ -106,6 +106,60 @@ export const doctorRegisterValidation = [
   body('experience').optional().isInt({ min: 0 }).withMessage('Experience must be 0 or more'),
   body('consultationFee').optional().isInt({ min: 0 }).withMessage('Fee must be 0 or more'),
   body('bio').optional().trim(),
+];
+
+export const emailOtpSendValidation = [
+  body('email')
+    .trim()
+    .notEmpty()
+    .withMessage('Email is required')
+    .isEmail()
+    .withMessage('Valid email is required')
+    .customSanitizer((v) => normalizeEmail(v)),
+];
+
+export const emailOtpVerifyValidation = [
+  body('email')
+    .trim()
+    .notEmpty()
+    .withMessage('Email is required')
+    .isEmail()
+    .withMessage('Valid email is required')
+    .customSanitizer((v) => normalizeEmail(v)),
+  body('otp')
+    .trim()
+    .notEmpty()
+    .withMessage('Verification code is required')
+    .matches(/^\d{6}$/)
+    .withMessage('Enter the 6-digit verification code'),
+];
+
+export const forgotPasswordResetValidation = [
+  body('email')
+    .trim()
+    .notEmpty()
+    .withMessage('Email is required')
+    .isEmail()
+    .withMessage('Valid email is required')
+    .customSanitizer((v) => normalizeEmail(v)),
+  body('password')
+    .isLength({ min: 6 })
+    .withMessage('Password must be at least 6 characters')
+    .custom((value) => {
+      if (!meetsPasswordComplexity(value)) {
+        throw new Error(STRONG_PASSWORD_MESSAGE);
+      }
+      return true;
+    }),
+  body('confirmPassword')
+    .notEmpty()
+    .withMessage('Confirm password is required')
+    .custom((value, { req }) => {
+      if (value !== req.body.password) {
+        throw new Error('Passwords do not match');
+      }
+      return true;
+    }),
 ];
 
 export const receptionistRegisterValidation = [
@@ -268,7 +322,7 @@ export const patientCreateValidation = [
     .custom((value) => {
       if (!value) return true;
       if (!normalizeIndianMobile(value)) {
-        throw new Error('Secondary number must be a valid 10-digit Indian number (+91).');
+        throw new Error('Secondary number must be exactly 10 digits.');
       }
       return true;
     })
@@ -278,7 +332,7 @@ export const patientCreateValidation = [
     .custom((value) => {
       if (!value) return true;
       if (!normalizeIndianMobile(value)) {
-        throw new Error('Relative contact must be a valid 10-digit Indian number (+91).');
+        throw new Error('Relative contact must be exactly 10 digits.');
       }
       return true;
     })
@@ -295,7 +349,7 @@ export const patientUpdateValidation = [
     .custom((value) => {
       if (value === undefined || value === null || value === '') return true;
       if (!normalizeIndianMobile(value)) {
-        throw new Error('Mobile number must be a valid 10-digit Indian number (+91).');
+        throw new Error('Mobile number must be exactly 10 digits.');
       }
       return true;
     })
@@ -322,7 +376,7 @@ export const patientUpdateValidation = [
     .custom((value) => {
       if (!value) return true;
       if (!normalizeIndianMobile(value)) {
-        throw new Error('Emergency contact phone must be a valid 10-digit Indian number (+91).');
+        throw new Error('Emergency contact phone must be exactly 10 digits.');
       }
       return true;
     })

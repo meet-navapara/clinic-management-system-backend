@@ -210,6 +210,17 @@ export const registerDoctor = async (req, res) => {
       });
     }
 
+    const { consumeEmailVerification } = await import('./emailOtpController.js');
+    try {
+      await consumeEmailVerification(email, 'signup');
+    } catch (verifyErr) {
+      return res.status(verifyErr.status || 403).json({
+        success: false,
+        message: verifyErr.message || 'Please verify your email before creating an account.',
+        errors: { email: verifyErr.message || 'Please verify your email before creating an account.' },
+      });
+    }
+
     const practiceName = String(clinicName || '').trim();
     if (!practiceName && !clinicId) {
       return res.status(400).json({
@@ -280,6 +291,7 @@ export const registerDoctor = async (req, res) => {
       postalCode: postalCode || '',
       isActive: true,
       approvalStatus: 'pending',
+      emailVerified: true,
     });
 
     const token = generateToken(user._id);
@@ -608,5 +620,83 @@ export const resetPassword = async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/** OTP-verified password reset (forgot-password flow). */
+export const resetPasswordWithOtp = async (req, res) => {
+  try {
+    const email = normalizeEmail(req.body.email);
+    const password = String(req.body.password || '');
+    const confirmPassword = String(req.body.confirmPassword || '');
+
+    if (!email || !email.includes('@')) {
+      return res.status(422).json({
+        success: false,
+        message: 'Valid email is required.',
+        errors: { email: 'Valid email is required.' },
+      });
+    }
+    if (password.length < 6) {
+      return res.status(422).json({
+        success: false,
+        message: 'Password must be at least 6 characters.',
+        errors: { password: 'Password must be at least 6 characters.' },
+      });
+    }
+    if (
+      !/[A-Z]/.test(password) ||
+      !/[a-z]/.test(password) ||
+      !/\d/.test(password) ||
+      !/[^A-Za-z0-9]/.test(password)
+    ) {
+      return res.status(422).json({
+        success: false,
+        message:
+          'Password must contain at least one uppercase letter, one lowercase letter, one digit, and one special character.',
+        errors: {
+          password:
+            'Password must contain at least one uppercase letter, one lowercase letter, one digit, and one special character.',
+        },
+      });
+    }
+    if (password !== confirmPassword) {
+      return res.status(422).json({
+        success: false,
+        message: 'Passwords do not match.',
+        errors: { confirmPassword: 'Passwords do not match.' },
+      });
+    }
+
+    const user = await User.findOne({ email }).select('+password');
+    if (!user || user.role === 'patient') {
+      return res.status(404).json({
+        success: false,
+        message: 'No account is registered with this email.',
+        errors: { email: 'No account is registered with this email.' },
+      });
+    }
+
+    const { consumeEmailVerification } = await import('./emailOtpController.js');
+    try {
+      await consumeEmailVerification(email, 'password_reset');
+    } catch (verifyErr) {
+      return res.status(verifyErr.status || 403).json({
+        success: false,
+        message: verifyErr.message || 'Please verify the OTP before resetting your password.',
+      });
+    }
+
+    user.password = password;
+    user.passwordResetToken = undefined;
+    user.passwordResetExpires = undefined;
+    await user.save();
+
+    return res.json({
+      success: true,
+      message: 'Password updated. Please sign in with your new password.',
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message || 'Could not reset password.' });
   }
 };

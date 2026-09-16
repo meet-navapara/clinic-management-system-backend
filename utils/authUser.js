@@ -18,6 +18,7 @@ export const toAuthUser = (user) => {
     role: doc.role,
     clinicId: doc.clinicId || null,
     approvalStatus: doc.approvalStatus || (doc.role === 'doctor' ? 'pending' : 'approved'),
+    emailVerified: Boolean(doc.emailVerified),
     specialization: doc.specialization || '',
     qualification: doc.qualification || '',
     experience: doc.experience ?? 0,

@@ -32,7 +32,9 @@ import { migrateAuthRoles } from './utils/migrateAuthRoles.js';
 import { migrateDoctorClinicIsolation } from './utils/migrateDoctorClinicIsolation.js';
 import { apiLimiter } from './middleware/rateLimit.js';
 
-dotenv.config();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+dotenv.config({ path: path.resolve(__dirname, '.env') });
 
 if (!process.env.JWT_SECRET) {
   console.error('JWT_SECRET is not set. Refusing to start.');
@@ -60,11 +62,14 @@ connectDB().then(async () => {
   } catch (err) {
     console.warn('Doctor clinic isolation migrate skipped:', err.message);
   }
+  try {
+    const EmailOtp = (await import('./models/EmailOtp.js')).default;
+    await EmailOtp.syncIndexes();
+  } catch (err) {
+    console.warn('EmailOtp index sync skipped:', err.message);
+  }
   startReminderScheduler();
 });
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 const app = express();
 

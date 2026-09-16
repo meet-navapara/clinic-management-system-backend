@@ -60,7 +60,7 @@ export const getAdminDashboard = async (req, res) => {
 export const listClinicDoctors = async (req, res) => {
   try {
     const filter = doctorFilter(req);
-    const { status, specialization, search, page = 1, limit = 50 } = req.query;
+    const { status, specialization, search, page = 1, limit = 20 } = req.query;
 
     if (status) filter.approvalStatus = status;
     if (specialization) {
@@ -77,7 +77,7 @@ export const listClinicDoctors = async (req, res) => {
     }
 
     const pageNum = Math.max(1, Number(page) || 1);
-    const limitNum = Math.min(100, Math.max(1, Number(limit) || 50));
+    const limitNum = Math.min(100, Math.max(1, Number(limit) || 20));
     const skip = (pageNum - 1) * limitNum;
 
     const [doctors, total] = await Promise.all([
