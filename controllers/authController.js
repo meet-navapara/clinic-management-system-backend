@@ -533,14 +533,22 @@ export const logout = async (_req, res) => {
 export const forgotPassword = async (req, res) => {
   try {
     const email = normalizeEmail(req.body.email);
-    const generic = {
-      success: true,
-      message: 'If that email is registered, a reset link has been sent.',
-    };
-    if (!email) return res.json(generic);
+    if (!email || !email.includes('@')) {
+      return res.status(422).json({
+        success: false,
+        message: 'Valid email is required.',
+        errors: { email: 'Valid email is required.' },
+      });
+    }
 
     const user = await User.findOne({ email });
-    if (!user || user.role === 'patient') return res.json(generic);
+    if (!user || user.role === 'patient') {
+      return res.status(404).json({
+        success: false,
+        message: 'No account is registered with this email.',
+        errors: { email: 'No account is registered with this email.' },
+      });
+    }
 
     const crypto = await import('crypto');
     const rawToken = crypto.randomBytes(32).toString('hex');
@@ -553,33 +561,34 @@ export const forgotPassword = async (req, res) => {
       .split(',')[0]
       .trim();
     const resetUrl = `${clientOrigin}/reset-password?token=${rawToken}`;
+    const subject = 'Reset your Z Health password';
+    const text = `Reset your password using this link (valid 1 hour):\n\n${resetUrl}\n\nIf you did not request this, ignore this email.`;
+    const html = `
+      <p>We received a request to reset your Z Health password.</p>
+      <p><a href="${resetUrl}" style="display:inline-block;padding:10px 16px;background:#2f6fed;color:#fff;text-decoration:none;border-radius:8px;font-weight:600;">Reset password</a></p>
+      <p>Or copy this link:</p>
+      <p><a href="${resetUrl}">${resetUrl}</a></p>
+      <p>This link expires in <strong>1 hour</strong>.</p>
+      <p>If you did not request this, you can ignore this email.</p>
+    `;
 
     try {
-      const { sendEmailMessage } = await import('../utils/comms/providers.js');
-      await sendEmailMessage({
-        toEmail: user.email,
-        subject: 'Reset your clinic password',
-        text: `Reset your password using this link (valid 1 hour):\n\n${resetUrl}\n\nIf you did not request this, ignore this email.`,
-        html: `<p>Reset your password using this link (valid 1 hour):</p><p><a href="${resetUrl}">${resetUrl}</a></p><p>If you did not request this, ignore this email.</p>`,
-      });
+      const { sendMailtrapEmail } = await import('../utils/mailtrap.js');
+      await sendMailtrapEmail({ toEmail: user.email, subject, text, html });
     } catch (err) {
-      // Clear token if email cannot be sent so attackers cannot fish valid tokens offline.
       user.passwordResetToken = undefined;
       user.passwordResetExpires = undefined;
       await user.save({ validateBeforeSave: false });
-      if (!process.env.RESEND_API_KEY || !process.env.EMAIL_FROM) {
-        return res.status(503).json({
-          success: false,
-          message: 'Password reset email is not configured. Contact your administrator.',
-        });
-      }
-      return res.status(502).json({
+      return res.status(err.status || 502).json({
         success: false,
         message: err.message || 'Failed to send reset email.',
       });
     }
 
-    return res.json(generic);
+    return res.json({
+      success: true,
+      message: 'Password reset link sent to your email.',
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Something went wrong. Please try again.' });
   }
@@ -623,80 +632,3 @@ export const resetPassword = async (req, res) => {
   }
 };
 
-/** OTP-verified password reset (forgot-password flow). */
-export const resetPasswordWithOtp = async (req, res) => {
-  try {
-    const email = normalizeEmail(req.body.email);
-    const password = String(req.body.password || '');
-    const confirmPassword = String(req.body.confirmPassword || '');
-
-    if (!email || !email.includes('@')) {
-      return res.status(422).json({
-        success: false,
-        message: 'Valid email is required.',
-        errors: { email: 'Valid email is required.' },
-      });
-    }
-    if (password.length < 6) {
-      return res.status(422).json({
-        success: false,
-        message: 'Password must be at least 6 characters.',
-        errors: { password: 'Password must be at least 6 characters.' },
-      });
-    }
-    if (
-      !/[A-Z]/.test(password) ||
-      !/[a-z]/.test(password) ||
-      !/\d/.test(password) ||
-      !/[^A-Za-z0-9]/.test(password)
-    ) {
-      return res.status(422).json({
-        success: false,
-        message:
-          'Password must contain at least one uppercase letter, one lowercase letter, one digit, and one special character.',
-        errors: {
-          password:
-            'Password must contain at least one uppercase letter, one lowercase letter, one digit, and one special character.',
-        },
-      });
-    }
-    if (password !== confirmPassword) {
-      return res.status(422).json({
-        success: false,
-        message: 'Passwords do not match.',
-        errors: { confirmPassword: 'Passwords do not match.' },
-      });
-    }
-
-    const user = await User.findOne({ email }).select('+password');
-    if (!user || user.role === 'patient') {
-      return res.status(404).json({
-        success: false,
-        message: 'No account is registered with this email.',
-        errors: { email: 'No account is registered with this email.' },
-      });
-    }
-
-    const { consumeEmailVerification } = await import('./emailOtpController.js');
-    try {
-      await consumeEmailVerification(email, 'password_reset');
-    } catch (verifyErr) {
-      return res.status(verifyErr.status || 403).json({
-        success: false,
-        message: verifyErr.message || 'Please verify the OTP before resetting your password.',
-      });
-    }
-
-    user.password = password;
-    user.passwordResetToken = undefined;
-    user.passwordResetExpires = undefined;
-    await user.save();
-
-    return res.json({
-      success: true,
-      message: 'Password updated. Please sign in with your new password.',
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message || 'Could not reset password.' });
-  }
-};

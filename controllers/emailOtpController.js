@@ -18,7 +18,6 @@ import {
 } from '../utils/emailOtp.js';
 
 const EMAIL_TAKEN = 'An account with this email already exists.';
-const EMAIL_NOT_REGISTERED = 'No account is registered with this email.';
 
 async function findOtpRecord(email, purpose) {
   return EmailOtp.findOne({ email, purpose }).select('+otpHash');
@@ -125,11 +124,7 @@ export async function consumeEmailVerification(email, purpose = 'signup') {
   const normalized = normalizeEmail(email);
   const record = await EmailOtp.findOne({ email: normalized, purpose });
   if (!isVerificationValid(record)) {
-    const err = new Error(
-      purpose === 'password_reset'
-        ? 'Please verify the OTP before resetting your password.'
-        : 'Please verify your email before creating an account.'
-    );
+    const err = new Error('Please verify your email before creating an account.');
     err.status = 403;
     err.code = 'EMAIL_NOT_VERIFIED';
     throw err;
@@ -205,92 +200,6 @@ export async function verifySignupEmailOtp(req, res) {
     return res.json({
       success: true,
       message: 'Email verified successfully.',
-      verified: true,
-      verifiedUntil: record.verifiedUntil,
-    });
-  } catch (error) {
-    return res.status(error.status || 500).json({
-      success: false,
-      message: error.message || 'Could not verify code.',
-      ...(error.attemptsRemaining != null ? { attemptsRemaining: error.attemptsRemaining } : {}),
-    });
-  }
-}
-
-export async function sendForgotPasswordOtp(req, res) {
-  try {
-    const email = normalizeEmail(req.body.email);
-    if (!email || !email.includes('@')) {
-      return res.status(422).json({
-        success: false,
-        message: 'Valid email is required.',
-        errors: { email: 'Valid email is required.' },
-      });
-    }
-
-    const user = await User.findOne({ email }).select('_id role');
-    if (!user || user.role === 'patient') {
-      return res.status(404).json({
-        success: false,
-        message: EMAIL_NOT_REGISTERED,
-        errors: { email: EMAIL_NOT_REGISTERED },
-      });
-    }
-
-    const meta = await issueAndSendOtp({
-      email,
-      purpose: 'password_reset',
-      subject: 'Your Z Health password reset code',
-      intro: 'Your password reset code is:',
-    });
-
-    return res.json({
-      success: true,
-      message: 'Verification code sent to your email.',
-      ...meta,
-    });
-  } catch (error) {
-    return res.status(error.status || 500).json({
-      success: false,
-      message: error.message || 'Could not send verification code.',
-      ...(error.cooldownSeconds ? { cooldownSeconds: error.cooldownSeconds } : {}),
-    });
-  }
-}
-
-export async function verifyForgotPasswordOtp(req, res) {
-  try {
-    const email = normalizeEmail(req.body.email);
-    const otp = normalizeOtpInput(req.body.otp);
-
-    if (!email || !email.includes('@')) {
-      return res.status(422).json({
-        success: false,
-        message: 'Valid email is required.',
-        errors: { email: 'Valid email is required.' },
-      });
-    }
-    if (otp.length !== OTP_LENGTH) {
-      return res.status(422).json({
-        success: false,
-        message: `Enter the ${OTP_LENGTH}-digit verification code.`,
-        errors: { otp: `Enter the ${OTP_LENGTH}-digit verification code.` },
-      });
-    }
-
-    const user = await User.findOne({ email }).select('_id role');
-    if (!user || user.role === 'patient') {
-      return res.status(404).json({
-        success: false,
-        message: EMAIL_NOT_REGISTERED,
-        errors: { email: EMAIL_NOT_REGISTERED },
-      });
-    }
-
-    const record = await verifyOtpCode({ email, otp, purpose: 'password_reset' });
-    return res.json({
-      success: true,
-      message: 'OTP verified. You can set a new password.',
       verified: true,
       verifiedUntil: record.verifiedUntil,
     });

@@ -134,34 +134,6 @@ export const emailOtpVerifyValidation = [
     .withMessage('Enter the 6-digit verification code'),
 ];
 
-export const forgotPasswordResetValidation = [
-  body('email')
-    .trim()
-    .notEmpty()
-    .withMessage('Email is required')
-    .isEmail()
-    .withMessage('Valid email is required')
-    .customSanitizer((v) => normalizeEmail(v)),
-  body('password')
-    .isLength({ min: 6 })
-    .withMessage('Password must be at least 6 characters')
-    .custom((value) => {
-      if (!meetsPasswordComplexity(value)) {
-        throw new Error(STRONG_PASSWORD_MESSAGE);
-      }
-      return true;
-    }),
-  body('confirmPassword')
-    .notEmpty()
-    .withMessage('Confirm password is required')
-    .custom((value, { req }) => {
-      if (value !== req.body.password) {
-        throw new Error('Passwords do not match');
-      }
-      return true;
-    }),
-];
-
 export const receptionistRegisterValidation = [
   ...registerValidation,
   body('clinicId').optional().isMongoId().withMessage('Valid clinic is required'),

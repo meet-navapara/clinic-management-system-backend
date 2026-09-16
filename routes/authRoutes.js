@@ -11,7 +11,6 @@ import {
   updateProfile,
   forgotPassword,
   resetPassword,
-  resetPasswordWithOtp,
 } from '../controllers/authController.js';
 import { protect } from '../middleware/auth.js';
 import { uploadProfilePhoto } from '../middleware/uploadProfilePhoto.js';
@@ -24,15 +23,9 @@ import {
   handleValidation,
   emailOtpSendValidation,
   emailOtpVerifyValidation,
-  forgotPasswordResetValidation,
 } from '../middleware/validators.js';
 import { authLimiter, loginLimiter, passwordResetLimiter, emailOtpLimiter } from '../middleware/rateLimit.js';
-import {
-  sendSignupEmailOtp,
-  verifySignupEmailOtp,
-  sendForgotPasswordOtp,
-  verifyForgotPasswordOtp,
-} from '../controllers/emailOtpController.js';
+import { sendSignupEmailOtp, verifySignupEmailOtp } from '../controllers/emailOtpController.js';
 
 const router = Router();
 
@@ -50,27 +43,6 @@ router.post(
   emailOtpVerifyValidation,
   handleValidation,
   verifySignupEmailOtp
-);
-router.post(
-  '/forgot-password/send-otp',
-  passwordResetLimiter,
-  emailOtpSendValidation,
-  handleValidation,
-  sendForgotPasswordOtp
-);
-router.post(
-  '/forgot-password/verify-otp',
-  passwordResetLimiter,
-  emailOtpVerifyValidation,
-  handleValidation,
-  verifyForgotPasswordOtp
-);
-router.post(
-  '/forgot-password/reset',
-  passwordResetLimiter,
-  forgotPasswordResetValidation,
-  handleValidation,
-  resetPasswordWithOtp
 );
 router.post('/register', authLimiter, registerValidation, handleValidation, register);
 router.post(

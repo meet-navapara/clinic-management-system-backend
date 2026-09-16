@@ -13,12 +13,44 @@ function mailtrapConfigured() {
 export function assertMailtrapConfigured() {
   if (!mailtrapConfigured()) {
     const err = new Error(
-      'Email OTP is not configured. Required: MAILTRAP_HOST, MAILTRAP_USER, MAILTRAP_PASS, MAILTRAP_FROM.'
+      'Email is not configured. Required: MAILTRAP_HOST, MAILTRAP_USER, MAILTRAP_PASS, MAILTRAP_FROM.'
     );
     err.status = 503;
     err.code = 'MAILTRAP_NOT_CONFIGURED';
     throw err;
   }
+}
+
+function createMailtrapTransport() {
+  assertMailtrapConfigured();
+  const host = process.env.MAILTRAP_HOST.trim();
+  const port = Number(process.env.MAILTRAP_PORT || 2525);
+  const user = process.env.MAILTRAP_USER.trim();
+  const pass = process.env.MAILTRAP_PASS.trim();
+  return {
+    from: process.env.MAILTRAP_FROM.trim(),
+    transporter: nodemailer.createTransport({
+      host,
+      port,
+      secure: port === 465,
+      auth: { user, pass },
+    }),
+  };
+}
+
+/**
+ * Send a general email via Mailtrap SMTP.
+ */
+export async function sendMailtrapEmail({ toEmail, subject, text, html }) {
+  const email = normalizeEmail(toEmail);
+  if (!email || !email.includes('@')) {
+    const err = new Error('Invalid email address.');
+    err.status = 422;
+    throw err;
+  }
+  const { from, transporter } = createMailtrapTransport();
+  await transporter.sendMail({ from, to: email, subject, text, html });
+  return { provider: 'mailtrap' };
 }
 
 /**
@@ -31,27 +63,6 @@ export async function sendMailtrapOtpEmail({
   subject = 'Your Z Health verification code',
   intro = 'Your verification code is:',
 }) {
-  assertMailtrapConfigured();
-  const email = normalizeEmail(toEmail);
-  if (!email || !email.includes('@')) {
-    const err = new Error('Invalid email address.');
-    err.status = 422;
-    throw err;
-  }
-
-  const host = process.env.MAILTRAP_HOST.trim();
-  const port = Number(process.env.MAILTRAP_PORT || 2525);
-  const user = process.env.MAILTRAP_USER.trim();
-  const pass = process.env.MAILTRAP_PASS.trim();
-  const from = process.env.MAILTRAP_FROM.trim();
-
-  const transporter = nodemailer.createTransport({
-    host,
-    port,
-    secure: port === 465,
-    auth: { user, pass },
-  });
-
   const text = `${intro} ${otp}. It expires in 10 minutes. If you did not request this, ignore this email.`;
   const html = `
     <p>${intro}</p>
@@ -59,7 +70,5 @@ export async function sendMailtrapOtpEmail({
     <p>This code expires in <strong>10 minutes</strong>.</p>
     <p>If you did not request this, you can ignore this email.</p>
   `;
-
-  await transporter.sendMail({ from, to: email, subject, text, html });
-  return { provider: 'mailtrap' };
+  return sendMailtrapEmail({ toEmail, subject, text, html });
 }
