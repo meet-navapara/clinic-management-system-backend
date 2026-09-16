@@ -1,4 +1,28 @@
 {
-  "$schema": "https://openapi.vercel.sh/vercel.json",
-  "regions": ["bom1"]
+  "version": 2,
+  "regions": ["bom1"],
+  "builds": [
+    {
+      "src": "api/index.cjs",
+      "use": "@vercel/node",
+      "config": {
+        "includeFiles": [
+          "server.js",
+          "config/**",
+          "controllers/**",
+          "middleware/**",
+          "models/**",
+          "routes/**",
+          "utils/**",
+          "package.json"
+        ]
+      }
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "api/index.cjs"
+    }
+  ]
 }

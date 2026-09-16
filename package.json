@@ -4,6 +4,9 @@
   "description": "Doctor-centric clinic practice management API",
   "main": "server.js",
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",

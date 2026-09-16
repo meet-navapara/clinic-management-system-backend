@@ -38,6 +38,14 @@ dotenv.config({ path: path.resolve(__dirname, '.env') });
 
 const isVercel = Boolean(process.env.VERCEL);
 
+if (isVercel) {
+  console.log('Vercel boot', {
+    hasJwt: Boolean(process.env.JWT_SECRET),
+    hasMongo: Boolean(process.env.MONGODB_URI),
+    node: process.version,
+  });
+}
+
 if (!process.env.JWT_SECRET) {
   console.error('JWT_SECRET is not set. Refusing to start.');
   if (!isVercel) process.exit(1);
