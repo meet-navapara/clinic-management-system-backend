@@ -10,20 +10,21 @@ import Appointment from '../models/Appointment.js';
 import { asyncHandler } from '../middleware/access.js';
 import { clinicQuery, assertSameClinic, assertBranchAccess } from '../utils/branchScope.js';
 import { sanitizePrintHtml, PRINT_HTML_FIELDS } from '../utils/sanitizeHtml.js';
-import { uploadImageBuffer } from '../utils/cloudinary.js';
+import { uploadImageBuffer, isCloudinaryConfigured } from '../utils/cloudinary.js';
 
 const isHttpUrl = (value) => /^https?:\/\//i.test(String(value || '').trim());
 const isDataUrl = (value) => String(value || '').startsWith('data:image/');
+const MAX_DATA_URL_CHARS = 500000;
 
 function sanitizeImageField(value, fieldName) {
   if (value === undefined) return undefined;
   const raw = String(value || '').trim();
   if (!raw) return '';
   if (isHttpUrl(raw)) return raw;
-  // Keep small legacy data URLs so existing clinics don't break; block huge payloads.
-  if (isDataUrl(raw) && raw.length <= 120000) return raw;
+  // Keep data URLs (dev / no Cloudinary) under a safe body size.
+  if (isDataUrl(raw) && raw.length <= MAX_DATA_URL_CHARS) return raw;
   const err = new Error(
-    `${fieldName} must be uploaded via Cloudinary. Use the Upload button, then Save.`
+    `${fieldName} must be uploaded with the Upload button (Cloudinary or a small image), then Save.`
   );
   err.status = 400;
   throw err;
@@ -174,10 +175,24 @@ export const uploadPrintAsset = asyncHandler(async (req, res) => {
   }
 
   const clinicId = String(req.user.clinicId);
-  const folder = `clinic-management/${clinicId}/print`;
-  const publicId = kind === 'logo' ? 'clinic-logo' : 'doctor-signature';
-  const result = await uploadImageBuffer(req.file.buffer, { folder, publicId });
-  const url = result.secure_url;
+  let url;
+  if (isCloudinaryConfigured()) {
+    const folder = `clinic-management/${clinicId}/print`;
+    const publicId = kind === 'logo' ? 'clinic-logo' : 'doctor-signature';
+    const result = await uploadImageBuffer(req.file.buffer, { folder, publicId });
+    url = result.secure_url;
+  } else {
+    // Local/dev fallback when Cloudinary env vars are missing
+    const mime = req.file.mimetype || 'image/jpeg';
+    url = `data:${mime};base64,${req.file.buffer.toString('base64')}`;
+    if (url.length > MAX_DATA_URL_CHARS) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'Image is too large for local storage. Add CLOUDINARY_* to clinic-backend/.env or use a smaller image (under ~350 KB).',
+      });
+    }
+  }
 
   const field = kind === 'logo' ? 'logo' : 'signatureImage';
   const settings = await PrintSettings.findOneAndUpdate(

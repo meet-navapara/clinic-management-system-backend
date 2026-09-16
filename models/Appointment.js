@@ -98,8 +98,9 @@ appointmentSchema.index(
   { doctor: 1, appointmentDate: 1, timeSlot: 1 },
   {
     unique: true,
+    // Only active bookings block a slot — completed/cancelled/no_show free it up.
     partialFilterExpression: {
-      status: { $in: ['pending', 'scheduled', 'confirmed', 'completed'] },
+      status: { $in: ['pending', 'scheduled', 'confirmed'] },
     },
   }
 );

@@ -31,7 +31,13 @@ const branchSchema = new mongoose.Schema(
     appointmentDuration: { type: Number, default: 30, min: 5 },
     logo: { type: String, default: '' },
     displayTitle: { type: String, default: '', trim: true },
+    /** Primary / default room (kept for queue display compatibility). */
     roomLabel: { type: String, default: 'Room 1', trim: true },
+    /** All rooms available at this branch (patient admit, queue, etc.). */
+    rooms: {
+      type: [String],
+      default: () => ['Room 1'],
+    },
     tokenPrefix: { type: String, default: '', trim: true },
     isDefault: { type: Boolean, default: false },
     isActive: { type: Boolean, default: true, index: true },

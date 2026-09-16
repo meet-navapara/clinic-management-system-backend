@@ -1,6 +1,11 @@
 import User from '../models/User.js';
 import Appointment from '../models/Appointment.js';
 import { ACTIVE_APPOINTMENT_STATUSES } from '../models/Appointment.js';
+import {
+  generateTimeSlots,
+  windowFromLegacySlots,
+  timeToMinutes,
+} from '../utils/timeSlots.js';
 
 const clinicScopedFilter = (req, base = {}) => {
   const filter = { ...base };
@@ -76,7 +81,7 @@ export const getDoctorAvailability = async (req, res) => {
     });
 
     const doctor = await User.findOne(filter).select(
-      'availableDays availableSlots name clinicId isActive'
+      'availableDays availableSlots name clinicId isActive practiceSettings'
     );
 
     if (!doctor) {
@@ -88,7 +93,33 @@ export const getDoctorAvailability = async (req, res) => {
     }
 
     const { date } = req.query;
+    const durationMinutes = Math.max(
+      5,
+      Math.min(
+        240,
+        Number(req.query.durationMinutes) ||
+          doctor.practiceSettings?.defaultDurationMinutes ||
+          30
+      )
+    );
+
+    const settings = doctor.practiceSettings || {};
+    const legacyWindow = windowFromLegacySlots(doctor.availableSlots);
+    const dayStart = settings.dayStart || legacyWindow.dayStart;
+    const dayEnd = settings.dayEnd || legacyWindow.dayEnd;
+    const breakStart = settings.breakStart || '13:00';
+    const breakEnd = settings.breakEnd || '14:00';
+
+    const allSlots = generateTimeSlots({
+      dayStart,
+      dayEnd,
+      durationMinutes,
+      breakStart,
+      breakEnd,
+    });
+
     let bookedSlots = [];
+    let bookedRanges = [];
 
     if (date) {
       const startOfDay = new Date(date);
@@ -99,19 +130,36 @@ export const getDoctorAvailability = async (req, res) => {
       const appointments = await Appointment.find({
         doctor: doctor._id,
         appointmentDate: { $gte: startOfDay, $lte: endOfDay },
-        status: { $in: [...ACTIVE_APPOINTMENT_STATUSES, 'completed'] },
-      }).select('timeSlot');
+        status: { $in: [...ACTIVE_APPOINTMENT_STATUSES] },
+      }).select('timeSlot durationMinutes');
 
       bookedSlots = appointments.map((a) => a.timeSlot);
+      bookedRanges = appointments
+        .map((a) => {
+          const start = timeToMinutes(a.timeSlot);
+          if (start == null) return null;
+          const dur = Number(a.durationMinutes) || durationMinutes;
+          return { start, end: start + dur };
+        })
+        .filter(Boolean);
     }
 
-    const availableSlots = doctor.availableSlots.filter((slot) => !bookedSlots.includes(slot));
+    const availableSlots = allSlots.filter((slot) => {
+      const start = timeToMinutes(slot);
+      if (start == null) return false;
+      const end = start + durationMinutes;
+      return !bookedRanges.some((b) => start < b.end && end > b.start);
+    });
 
     res.json({
       success: true,
       doctorId: doctor._id,
       clinicId: doctor.clinicId || null,
       availableDays: doctor.availableDays,
+      durationMinutes,
+      dayStart,
+      dayEnd,
+      allSlots,
       availableSlots,
       bookedSlots,
     });

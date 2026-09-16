@@ -158,8 +158,100 @@ export const patientCreateValidation = [
     }),
   body('age').optional({ values: 'falsy' }).isInt({ min: 0, max: 150 }).withMessage('Age must be between 0 and 150'),
   body('address').optional({ values: 'falsy' }).trim().isLength({ max: 500 }).withMessage('Address is too long'),
-  body('city').optional({ values: 'falsy' }).trim().isLength({ max: 80 }),
-  body('area').optional({ values: 'falsy' }).trim().isLength({ max: 80 }),
+  body('city')
+    .optional({ values: 'falsy' })
+    .trim()
+    .isIn([
+      'Ahmedabad',
+      'Amreli',
+      'Anand',
+      'Ankleshwar',
+      'Bharuch',
+      'Bhavnagar',
+      'Bhuj',
+      'Botad',
+      'Dahod',
+      'Deesa',
+      'Dhoraji',
+      'Dwarka',
+      'Gandhidham',
+      'Gandhinagar',
+      'Godhra',
+      'Gondal',
+      'Himmatnagar',
+      'Idar',
+      'Jamnagar',
+      'Jetpur',
+      'Junagadh',
+      'Kalol',
+      'Keshod',
+      'Khambhat',
+      'Kutch',
+      'Limbdi',
+      'Mahesana',
+      'Mandvi',
+      'Modasa',
+      'Morbi',
+      'Nadiad',
+      'Navsari',
+      'Palanpur',
+      'Patan',
+      'Porbandar',
+      'Rajkot',
+      'Savarkundla',
+      'Sidhpur',
+      'Surat',
+      'Surendranagar',
+      'Una',
+      'Unjha',
+      'Vadodara',
+      'Valsad',
+      'Vapi',
+      'Veraval',
+      'Visnagar',
+      'Wadhwan',
+      'Other',
+    ])
+    .withMessage('Select a valid Gujarat city'),
+  body('area').optional({ values: 'falsy' }).trim().isLength({ max: 80 }).withMessage('Area is too long'),
+  body('room').optional({ values: 'falsy' }).trim().isLength({ max: 80 }).withMessage('Room is too long'),
+  body('caseId')
+    .optional({ values: 'falsy' })
+    .trim()
+    .matches(/^[a-zA-Z0-9\-_/]{0,24}$/)
+    .withMessage('Case Id must be at most 24 letters, numbers, or -_/'),
+  body('occupation')
+    .optional({ values: 'falsy' })
+    .trim()
+    .isLength({ max: 80 })
+    .withMessage('Occupation is too long')
+    .custom((value) => {
+      if (value && /[0-9]/.test(value)) {
+        throw new Error('Occupation cannot contain numbers.');
+      }
+      return true;
+    }),
+  body('patientCategory')
+    .optional({ values: 'falsy' })
+    .trim()
+    .isIn(['Patient', 'Family', 'Corporate'])
+    .withMessage('Invalid patient category'),
+  body('emergencyContactRelationship')
+    .optional({ values: 'falsy' })
+    .trim()
+    .isIn([
+      'Father',
+      'Mother',
+      'Spouse',
+      'Son',
+      'Daughter',
+      'Brother',
+      'Sister',
+      'Guardian',
+      'Friend',
+      'Other',
+    ])
+    .withMessage('Select a valid relation'),
   body('bloodGroup')
     .optional({ values: 'falsy' })
     .isIn(['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-', 'Unknown'])
@@ -170,6 +262,7 @@ export const patientCreateValidation = [
     .matches(/^\d{12}$/)
     .withMessage('Aadhar number must be 12 digits'),
   body('doctorId').optional().isMongoId().withMessage('Valid doctor is required'),
+  body('admitPatient').optional().isBoolean().withMessage('Admit patient must be true or false'),
   body('secondaryPhone')
     .optional({ values: 'falsy' })
     .custom((value) => {

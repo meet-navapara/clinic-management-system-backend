@@ -17,10 +17,10 @@ export const globalSearch = asyncHandler(async (req, res) => {
   const branch = tenantFilter(req.user, req.branchId);
   const isDoctor = req.user.role === 'doctor';
 
+  // Clinic-wide patient chart (same as Patients list). Doctor filter stays on appointments/revenue.
   const patientScope = {
     ...branch,
     isActive: true,
-    ...(isDoctor ? { doctorId: req.user._id } : {}),
   };
 
   const matchingPatients = hasPermission(req.user, P.PATIENTS_VIEW)

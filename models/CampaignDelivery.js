@@ -31,7 +31,6 @@ const campaignDeliverySchema = new mongoose.Schema(
 
 campaignDeliverySchema.index({ campaignId: 1, patientId: 1 }, { unique: true });
 campaignDeliverySchema.index({ clinicId: 1, campaignId: 1, status: 1 });
-campaignDeliverySchema.index({ providerMessageId: 1 });
 
 const CampaignDelivery = mongoose.model('CampaignDelivery', campaignDeliverySchema);
 export default CampaignDelivery;

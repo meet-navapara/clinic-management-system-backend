@@ -22,12 +22,16 @@ const PRINT_HTML_OPTIONS = {
     'sub',
     'sup',
     'a',
+    'font',
+    'img',
   ],
   allowedAttributes: {
     a: ['href', 'title', 'target', 'rel'],
+    font: ['face', 'size', 'color', 'style'],
+    img: ['src', 'alt', 'title', 'width', 'height', 'style', 'class'],
     '*': ['style', 'class'],
   },
-  allowedSchemes: ['http', 'https', 'mailto'],
+  allowedSchemes: ['http', 'https', 'mailto', 'data'],
   allowProtocolRelative: false,
 };
 

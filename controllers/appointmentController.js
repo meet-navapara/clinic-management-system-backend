@@ -19,6 +19,12 @@ import {
 import { recordPatientEvent } from '../utils/patientTimeline.js';
 import { notifyDoctor } from '../utils/doctorNotify.js';
 import { ACTIVE_APPOINTMENT_STATUSES } from '../models/Appointment.js';
+import {
+  generateTimeSlots,
+  windowFromLegacySlots,
+  timeToMinutes,
+  isValidHhMm,
+} from '../utils/timeSlots.js';
 
 const isCastError = (error) => error?.name === 'CastError' || error?.kind === 'ObjectId';
 
@@ -35,15 +41,47 @@ const APPT_POPULATE = [
   },
 ];
 
-const assertSlotAvailable = async ({ doctor, doctorId, date, timeSlot, excludeId = null }) => {
+const assertSlotAvailable = async ({
+  doctor,
+  doctorId,
+  date,
+  timeSlot,
+  durationMinutes = 30,
+  excludeId = null,
+}) => {
   const dayName = date.toLocaleDateString('en-US', { weekday: 'long' });
+  const workingDays =
+    doctor.availableDays?.length > 0
+      ? doctor.availableDays
+      : ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
 
-  if (!doctor.availableDays?.includes(dayName)) {
+  if (!workingDays.includes(dayName)) {
     return { ok: false, status: 400, message: `Doctor is not available on ${dayName}.` };
   }
 
-  if (!doctor.availableSlots?.includes(timeSlot)) {
-    return { ok: false, status: 400, message: 'Selected time slot is not available.' };
+  if (!isValidHhMm(timeSlot)) {
+    return { ok: false, status: 400, message: 'Invalid time slot.' };
+  }
+
+  const duration = Math.max(5, Math.min(240, Number(durationMinutes) || 30));
+  const settings = doctor.practiceSettings || {};
+  const legacyWindow = windowFromLegacySlots(doctor.availableSlots);
+  const dayStart = settings.dayStart || legacyWindow.dayStart;
+  const dayEnd = settings.dayEnd || legacyWindow.dayEnd;
+  const allowed = generateTimeSlots({
+    dayStart,
+    dayEnd,
+    durationMinutes: duration,
+    breakStart: settings.breakStart || '13:00',
+    breakEnd: settings.breakEnd || '14:00',
+  });
+
+  if (!allowed.includes(timeSlot)) {
+    return {
+      ok: false,
+      status: 400,
+      message: `Selected time is outside available hours for a ${duration}-minute visit.`,
+    };
   }
 
   const startOfDay = new Date(date);
@@ -54,17 +92,25 @@ const assertSlotAvailable = async ({ doctor, doctorId, date, timeSlot, excludeId
   const existingFilter = {
     doctor: doctorId,
     appointmentDate: { $gte: startOfDay, $lte: endOfDay },
-    timeSlot,
-    status: { $in: ACTIVE_APPOINTMENT_STATUSES.concat(['completed']) },
+    status: { $in: ACTIVE_APPOINTMENT_STATUSES },
   };
   if (excludeId) existingFilter._id = { $ne: excludeId };
 
-  const existing = await Appointment.findOne(existingFilter);
-  if (existing) {
+  const existing = await Appointment.find(existingFilter).select('timeSlot durationMinutes');
+  const start = timeToMinutes(timeSlot);
+  const end = start + duration;
+  const clash = existing.some((a) => {
+    const bStart = timeToMinutes(a.timeSlot);
+    if (bStart == null) return a.timeSlot === timeSlot;
+    const bEnd = bStart + (Number(a.durationMinutes) || duration);
+    return start < bEnd && end > bStart;
+  });
+
+  if (clash) {
     return {
       ok: false,
       status: 400,
-      message: 'This time slot is already booked. Please choose another.',
+      message: 'This time overlaps another appointment. Please choose another slot.',
     };
   }
 
@@ -130,12 +176,6 @@ export const createAppointment = async (req, res) => {
     let doctor;
     if (isDoctor) {
       doctor = req.user;
-      if (String(patientRecord.doctorId) !== String(req.user._id)) {
-        return res.status(403).json({
-          success: false,
-          message: 'This patient is not in your patient list.',
-        });
-      }
     } else {
       const targetDoctorId = doctorId || patientRecord.doctorId;
       doctor = await User.findOne({
@@ -156,20 +196,20 @@ export const createAppointment = async (req, res) => {
     }
 
     const date = new Date(appointmentDate);
+    const duration =
+      durationMinutes ||
+      doctor.practiceSettings?.defaultDurationMinutes ||
+      30;
     const slotCheck = await assertSlotAvailable({
       doctor,
       doctorId: doctor._id,
       date,
       timeSlot,
+      durationMinutes: duration,
     });
     if (!slotCheck.ok) {
       return res.status(slotCheck.status).json({ success: false, message: slotCheck.message });
     }
-
-    const duration =
-      durationMinutes ||
-      doctor.practiceSettings?.defaultDurationMinutes ||
-      30;
 
     const initialStatus =
       requestedStatus && ['scheduled', 'confirmed'].includes(requestedStatus)
@@ -508,11 +548,18 @@ export const rescheduleAppointment = async (req, res) => {
     }
 
     const date = new Date(appointmentDate);
+    const duration =
+      durationMinutes !== undefined
+        ? Number(durationMinutes)
+        : appointment.durationMinutes ||
+          doctor.practiceSettings?.defaultDurationMinutes ||
+          30;
     const slotCheck = await assertSlotAvailable({
       doctor,
       doctorId: doctor._id,
       date,
       timeSlot,
+      durationMinutes: duration,
       excludeId: appointment._id,
     });
     if (!slotCheck.ok) {
@@ -588,7 +635,7 @@ export const getDoctorDashboardStats = async (req, res) => {
     const weekAgo = new Date();
     weekAgo.setDate(weekAgo.getDate() - 7);
 
-    const [todayAppts, allAppts, totalPatients, newPatients, upcoming] = await Promise.all([
+    const [todayAppts, allAppts, totalPatients, newPatients] = await Promise.all([
       Appointment.find({
         ...branchScope,
         doctor: doctorId,
@@ -597,15 +644,6 @@ export const getDoctorDashboardStats = async (req, res) => {
       Appointment.find({ ...branchScope, doctor: doctorId }).select('status patientId appointmentDate'),
       Patient.countDocuments({ ...branchScope, doctorId, isActive: true }),
       Patient.countDocuments({ ...branchScope, doctorId, isActive: true, createdAt: { $gte: weekAgo } }),
-      Appointment.find({
-        ...branchScope,
-        doctor: doctorId,
-        status: { $in: ACTIVE_APPOINTMENT_STATUSES },
-        appointmentDate: { $gte: todayStart },
-      })
-        .sort({ appointmentDate: 1, timeSlot: 1 })
-        .limit(5)
-        .populate(APPT_POPULATE),
     ]);
 
     const countByStatus = (list, status) =>
@@ -628,23 +666,36 @@ export const getDoctorDashboardStats = async (req, res) => {
     const QueueTicket = (await import('../models/QueueTicket.js')).default;
     const Prescription = (await import('../models/Prescription.js')).default;
 
-    const todayQueueDate = new Date();
-    todayQueueDate.setHours(0, 0, 0, 0);
-    const [ownRevenue, waitingQueue, rxCount] = await Promise.all([
+    const tomorrowStart = new Date(todayStart);
+    tomorrowStart.setDate(tomorrowStart.getDate() + 1);
+
+    const [ownRevenue, waitingQueue, rxCount, upcomingNext] = await Promise.all([
       Invoice.aggregate([
         { $match: { ...branchScope, doctorId, paymentStatus: { $ne: 'cancelled' } } },
         { $group: { _id: null, paid: { $sum: '$paidAmount' }, billed: { $sum: '$total' }, due: { $sum: '$dueAmount' } } },
       ]),
+      // Same day-range pattern as queueController — exact midnight equality misses tickets.
       QueueTicket.find({
         ...branchScope,
         doctorId,
-        queueDate: todayQueueDate,
+        queueDate: { $gte: todayStart, $lt: tomorrowStart },
         status: { $in: ['waiting', 'called', 'in_consultation'] },
       })
         .sort({ tokenNumber: 1 })
         .limit(8)
-        .populate('patientId', 'name patientCode'),
+        .populate('patientId', 'name patientCode')
+        .populate('appointmentId', 'timeSlot appointmentType status'),
       Prescription.countDocuments({ ...branchScope, doctorId }),
+      // Upcoming list = from tomorrow (today’s list is separate)
+      Appointment.find({
+        ...branchScope,
+        doctor: doctorId,
+        status: { $in: ACTIVE_APPOINTMENT_STATUSES },
+        appointmentDate: { $gte: tomorrowStart },
+      })
+        .sort({ appointmentDate: 1, timeSlot: 1 })
+        .limit(5)
+        .populate(APPT_POPULATE),
     ]);
 
     res.json({
@@ -671,7 +722,7 @@ export const getDoctorDashboardStats = async (req, res) => {
           completed: countByStatus(allAppts, 'completed'),
           cancelled: countByStatus(allAppts, 'cancelled'),
           noShow: countByStatus(allAppts, 'no_show'),
-          next: upcoming,
+          next: upcomingNext,
         },
         revenue: {
           paid: ownRevenue[0]?.paid || 0,

@@ -335,10 +335,7 @@ export const listMyPatients = async (req, res) => {
       Patient.countDocuments(filter),
     ]);
 
-    const withVisits = await attachVisitSummary(
-      patients,
-      req.user.role === 'doctor' ? req.user._id : null
-    );
+    const withVisits = await attachVisitSummary(patients, null);
 
     res.json({
       success: true,
@@ -369,17 +366,21 @@ export const getPatientById = async (req, res) => {
       .limit(100)
       .select('appointmentDate timeSlot status reason appointmentType durationMinutes notes createdAt');
 
-    const upcoming = appointments.filter((a) =>
-      ACTIVE_APPOINTMENT_STATUSES.includes(normalizeStatus(a.status))
-    );
-    const past = appointments.filter(
-      (a) => !ACTIVE_APPOINTMENT_STATUSES.includes(normalizeStatus(a.status))
-    );
+    const startToday = new Date();
+    startToday.setHours(0, 0, 0, 0);
+    const upcoming = appointments.filter((a) => {
+      const active = ACTIVE_APPOINTMENT_STATUSES.includes(normalizeStatus(a.status));
+      return active && new Date(a.appointmentDate) >= startToday;
+    });
+    const past = appointments.filter((a) => {
+      const active = ACTIVE_APPOINTMENT_STATUSES.includes(normalizeStatus(a.status));
+      return !active || new Date(a.appointmentDate) < startToday;
+    });
 
     const [notes, timeline] = await Promise.all([
-      PatientNote.find({ patientId: patient._id, doctorId: patient.doctorId }).sort({
-        createdAt: -1,
-      }),
+      PatientNote.find({ patientId: patient._id, clinicId: patient.clinicId })
+        .sort({ createdAt: -1 })
+        .populate('doctorId', 'name role'),
       PatientEvent.find({ patientId: patient._id }).sort({ createdAt: -1 }).limit(100),
     ]);
 
@@ -491,15 +492,19 @@ export const updatePatient = async (req, res) => {
     }
 
     const clinical = { ...(patient.clinical?.toObject?.() || patient.clinical || {}) };
-    if (
+    const hasClinicalUpdate =
       body.clinical ||
-      body.allergies ||
-      body.conditions ||
-      body.medications ||
-      body.alerts ||
+      body.allergies !== undefined ||
+      body.conditions !== undefined ||
+      body.medications !== undefined ||
+      body.alerts !== undefined ||
       body.otherHistory !== undefined ||
-      body.historyTags !== undefined
-    ) {
+      body.historyTags !== undefined ||
+      body.familyHistory !== undefined ||
+      body.surgeries !== undefined ||
+      body.medicalHistory !== undefined;
+
+    if (hasClinicalUpdate) {
       if (body.allergies !== undefined || body.clinical?.allergies !== undefined) {
         clinical.allergies = normalizeList(body.allergies ?? body.clinical?.allergies);
       }
@@ -568,8 +573,8 @@ export const updatePatient = async (req, res) => {
 
 export const addPatientNote = async (req, res) => {
   try {
-    if (req.user.role !== 'doctor') {
-      return res.status(403).json({ success: false, message: 'Only doctors can add notes.' });
+    if (!hasPermission(req.user, P.PATIENTS_MANAGE) && !hasPermission(req.user, P.CONSULTATION)) {
+      return res.status(403).json({ success: false, message: 'Not authorized to add notes.' });
     }
     const patient = await Patient.findById(req.params.id);
     if (!patient || !patient.isActive) {

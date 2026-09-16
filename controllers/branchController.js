@@ -5,6 +5,25 @@ import { clinicQuery, canAccessBranch, assertSameClinic } from '../utils/branchS
 import { writeAudit, AUDIT } from '../utils/audit.js';
 import { ADMIN_ROLES } from '../utils/permissions.js';
 
+function normalizeRooms(input, fallbackLabel = 'Room 1') {
+  const list = Array.isArray(input)
+    ? input
+    : typeof input === 'string'
+      ? input.split(',')
+      : [];
+  const cleaned = [
+    ...new Set(
+      list
+        .map((r) => String(r || '').trim())
+        .filter(Boolean)
+        .map((r) => r.slice(0, 80))
+    ),
+  ];
+  if (cleaned.length) return cleaned;
+  const fb = String(fallbackLabel || '').trim() || 'Room 1';
+  return [fb];
+}
+
 export const listBranches = asyncHandler(async (req, res) => {
   const filter = { ...clinicQuery(req.user) };
   if (req.query.active !== 'all') {
@@ -34,6 +53,8 @@ export const createBranch = asyncHandler(async (req, res) => {
     return res.status(400).json({ success: false, message: 'No clinic on this account.' });
   }
   const exists = await Branch.countDocuments({ clinicId });
+  const rooms = normalizeRooms(req.body.rooms, req.body.roomLabel || 'Room 1');
+  const roomLabel = String(req.body.roomLabel || rooms[0] || 'Room 1').trim() || rooms[0];
   const branch = await Branch.create({
     clinicId,
     name: req.body.name,
@@ -46,7 +67,8 @@ export const createBranch = asyncHandler(async (req, res) => {
     appointmentDuration: req.body.appointmentDuration || 30,
     logo: req.body.logo || '',
     displayTitle: req.body.displayTitle || '',
-    roomLabel: req.body.roomLabel || 'Room 1',
+    roomLabel,
+    rooms: rooms.includes(roomLabel) ? rooms : [roomLabel, ...rooms],
     tokenPrefix: req.body.tokenPrefix || '',
     isDefault: exists === 0,
     isActive: true,
@@ -78,12 +100,21 @@ export const updateBranch = asyncHandler(async (req, res) => {
     'appointmentDuration',
     'logo',
     'displayTitle',
-    'roomLabel',
     'tokenPrefix',
     'isActive',
   ];
   for (const field of fields) {
     if (req.body[field] !== undefined) branch[field] = req.body[field];
+  }
+  if (req.body.rooms !== undefined || req.body.roomLabel !== undefined) {
+    const rooms = normalizeRooms(
+      req.body.rooms !== undefined ? req.body.rooms : branch.rooms,
+      req.body.roomLabel || branch.roomLabel || 'Room 1'
+    );
+    const roomLabel =
+      String(req.body.roomLabel || rooms[0] || branch.roomLabel || 'Room 1').trim() || rooms[0];
+    branch.rooms = rooms.includes(roomLabel) ? rooms : [roomLabel, ...rooms];
+    branch.roomLabel = roomLabel;
   }
   if (req.body.isDefault === true) {
     await Branch.updateMany({ clinicId: branch.clinicId, _id: { $ne: branch._id } }, { $set: { isDefault: false } });

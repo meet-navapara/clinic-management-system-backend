@@ -3,6 +3,7 @@ import Prescription from '../models/Prescription.js';
 import Appointment from '../models/Appointment.js';
 import Patient from '../models/Patient.js';
 import Invoice from '../models/Invoice.js';
+import QueueTicket from '../models/QueueTicket.js';
 import { asyncHandler } from '../middleware/access.js';
 import { assertSameClinic, assertBranchAccess } from '../utils/branchScope.js';
 import { writeAudit, AUDIT } from '../utils/audit.js';
@@ -15,18 +16,13 @@ const pad = (n) => String(n).padStart(5, '0');
 
 const loadPatient = async (req, patientId) => {
   const patient = await Patient.findById(patientId);
-  if (!patient) {
+  if (!patient || !patient.isActive) {
     const err = new Error('Patient not found.');
     err.status = 404;
     throw err;
   }
   assertSameClinic(req.user, patient.clinicId);
   assertBranchAccess(req.user, patient.branchId);
-  if (req.user.role === 'doctor' && String(patient.doctorId) !== String(req.user._id)) {
-    const err = new Error('Patient not found.');
-    err.status = 404;
-    throw err;
-  }
   return patient;
 };
 
@@ -131,6 +127,23 @@ export const upsertConsultation = asyncHandler(async (req, res) => {
         appt.status = 'completed';
         await appt.save();
       }
+      await QueueTicket.updateMany(
+        {
+          appointmentId: consultation.appointmentId,
+          status: { $in: ['waiting', 'called', 'in_consultation'] },
+        },
+        { $set: { status: 'completed', completedAt: new Date() } }
+      ).catch(() => {});
+    } else {
+      await QueueTicket.updateMany(
+        {
+          patientId: consultation.patientId,
+          clinicId: consultation.clinicId,
+          status: { $in: ['waiting', 'called', 'in_consultation'] },
+          ...(consultation.branchId ? { branchId: consultation.branchId } : {}),
+        },
+        { $set: { status: 'completed', completedAt: new Date() } }
+      ).catch(() => {});
     }
     if (req.body.createInvoice) {
       const existing = consultation.appointmentId

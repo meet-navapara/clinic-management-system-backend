@@ -48,6 +48,11 @@ const practiceSettingsSchema = new mongoose.Schema(
       type: [String],
       default: ['Consultation', 'Follow-up', 'Procedure'],
     },
+    /** Dynamic slot window (used with duration to generate times). */
+    dayStart: { type: String, default: '09:00', trim: true },
+    dayEnd: { type: String, default: '18:00', trim: true },
+    breakStart: { type: String, default: '13:00', trim: true },
+    breakEnd: { type: String, default: '14:00', trim: true },
   },
   { _id: false }
 );
