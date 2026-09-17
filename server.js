@@ -117,6 +117,8 @@ const defaultOrigins = [
   'http://127.0.0.1:5173',
   'http://localhost:4173',
   'http://127.0.0.1:4173',
+  'https://zhealth.world',
+  'https://www.zhealth.world',
   'https://clinic-management-system-frontend-q7r9zpcd1.vercel.app',
 ];
 const configuredOrigins = String(process.env.CLIENT_ORIGINS || process.env.CLIENT_ORIGIN || '')
@@ -130,9 +132,11 @@ function isAllowedOrigin(origin) {
   if (allowedOrigins.includes(origin)) return true;
   try {
     const { protocol, hostname } = new URL(origin);
-    if (protocol === 'https:' && (hostname === 'vercel.app' || hostname.endsWith('.vercel.app'))) {
-      return true;
-    }
+    if (protocol !== 'https:') return false;
+    // Vercel preview / production aliases
+    if (hostname === 'vercel.app' || hostname.endsWith('.vercel.app')) return true;
+    // Production custom domain
+    if (hostname === 'zhealth.world' || hostname.endsWith('.zhealth.world')) return true;
   } catch {
     return false;
   }
@@ -148,6 +152,7 @@ app.use(
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Branch-Id'],
+    optionsSuccessStatus: 204,
   })
 );
 

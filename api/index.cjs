@@ -2,16 +2,34 @@
  * CommonJS Vercel entry — dynamically imports the ESM Express app.
  * Avoids ERR_REQUIRE_ESM and surfaces bootstrap errors as JSON.
  */
+function isAllowedOrigin(origin) {
+  if (!origin) return true;
+  try {
+    const { protocol, hostname } = new URL(origin);
+    if (protocol === 'http:' && (hostname === 'localhost' || hostname === '127.0.0.1')) {
+      return true;
+    }
+    if (protocol !== 'https:') return false;
+    if (hostname === 'zhealth.world' || hostname.endsWith('.zhealth.world')) return true;
+    if (hostname === 'vercel.app' || hostname.endsWith('.vercel.app')) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 module.exports = async function handler(req, res) {
-  const origin = req.headers.origin || '*';
+  const origin = req.headers.origin || '';
   const setCors = () => {
-    res.setHeader('Access-Control-Allow-Origin', origin);
+    if (!isAllowedOrigin(origin)) return;
+    res.setHeader('Access-Control-Allow-Origin', origin || '*');
     res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
     res.setHeader(
       'Access-Control-Allow-Headers',
       'Content-Type, Authorization, X-Branch-Id'
     );
+    res.setHeader('Vary', 'Origin');
   };
 
   if (req.method === 'OPTIONS') {
@@ -22,6 +40,8 @@ module.exports = async function handler(req, res) {
   }
 
   try {
+    // Ensure CORS on the real response too (not only preflight)
+    setCors();
     const mod = await import('../server.js');
     const app = mod.default;
     if (typeof app !== 'function') {
