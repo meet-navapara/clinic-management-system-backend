@@ -1,7 +1,7 @@
 import User from '../models/User.js';
 import EmailOtp from '../models/EmailOtp.js';
 import { normalizeEmail } from '../utils/normalizeContact.js';
-import { sendMailtrapOtpEmail } from '../utils/mailtrap.js';
+import { sendOtpEmail } from '../utils/sendEmail.js';
 import {
   generateOtpCode,
   hashOtp,
@@ -59,7 +59,7 @@ async function issueAndSendOtp({ email, purpose, subject, intro }) {
   await record.save();
 
   try {
-    await sendMailtrapOtpEmail({ toEmail: email, otp, subject, intro });
+    await sendOtpEmail({ toEmail: email, otp, subject, intro });
   } catch (sendErr) {
     record.lastSentAt = new Date(now.getTime() - RESEND_COOLDOWN_MS);
     await record.save();

@@ -171,7 +171,7 @@ export const registerClinicAdmin = async (req, res) => {
 
 /**
  * Doctor self-registration.
- * Creating a new clinic or joining an existing one requires ADMIN_SETUP_SECRET.
+ * Account stays pending until Super Admin approval.
  */
 export const registerDoctor = async (req, res) => {
   try {
@@ -196,10 +196,7 @@ export const registerDoctor = async (req, res) => {
       country,
       postalCode,
       clinicId,
-      setupKey,
     } = req.body;
-
-    if (!assertSetupKey(setupKey, res)) return;
 
     const contactErrors = await uniqueContactErrors(email, phone);
     if (Object.keys(contactErrors).length) {
@@ -573,8 +570,8 @@ export const forgotPassword = async (req, res) => {
     `;
 
     try {
-      const { sendMailtrapEmail } = await import('../utils/mailtrap.js');
-      await sendMailtrapEmail({ toEmail: user.email, subject, text, html });
+      const { sendEmail } = await import('../utils/sendEmail.js');
+      await sendEmail({ toEmail: user.email, subject, text, html });
     } catch (err) {
       user.passwordResetToken = undefined;
       user.passwordResetExpires = undefined;
