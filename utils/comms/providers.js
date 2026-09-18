@@ -85,11 +85,17 @@ export async function sendWhatsAppMessage({ toPhone, bodyText, context = {} }) {
 
   const authkey = process.env.MSG91_AUTH_KEY.trim();
   const integratedNumber = process.env.MSG91_WHATSAPP_NUMBER.trim();
-  const templateName = process.env.MSG91_WHATSAPP_TEMPLATE_NAME.trim();
+  // Optional reminder-specific template; falls back to campaign template name
+  const templateName = (
+    process.env.MSG91_WHATSAPP_REMINDER_TEMPLATE_NAME?.trim() ||
+    process.env.MSG91_WHATSAPP_TEMPLATE_NAME.trim()
+  );
   const namespace = process.env.MSG91_WHATSAPP_NAMESPACE || '';
   const languageCode = process.env.MSG91_WHATSAPP_LANGUAGE || 'en';
 
-  const varKeys = String(process.env.MSG91_WHATSAPP_BODY_VARS || 'patientName')
+  const varKeys = String(
+    process.env.MSG91_WHATSAPP_BODY_VARS || 'patientName,clinicName,doctorName,dateLabel,timeSlot'
+  )
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);

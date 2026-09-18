@@ -1,29 +1,33 @@
 # Campaign & communication integrations
 
-This clinic app sends campaigns through **real providers only**. If credentials are missing, send/test are blocked with `Provider not configured`.
+This clinic app sends campaigns **and appointment WhatsApp reminders** through **real providers only**. If credentials are missing, sends are blocked (no mock / fake "sent").
 
 ## Channels
 
-| Channel | Provider | Status when unconfigured |
-|---------|----------|--------------------------|
-| WhatsApp | MSG91 WhatsApp template API | Blocked |
-| SMS | MSG91 Flow / sendhttp | Blocked |
-| Email | Resend | Blocked |
+| Channel | Provider | Used for | Status when unconfigured |
+|---------|----------|----------|--------------------------|
+| WhatsApp | MSG91 WhatsApp template API | Campaigns + appointment confirmations/reminders | Blocked / reminder marked failed |
+| SMS | MSG91 Flow / sendhttp | Campaigns | Blocked |
+| Email | Resend | Campaigns + OTP / password reset | Blocked |
 
-There is **no mock send**. WhatsApp deep-links (`wa.me`) are no longer used for campaigns.
+There is **no mock send**. Manual `wa.me` deep-links remain available for staff "Open WhatsApp" buttons only — they are **not** used for automatic reminders.
 
 ## Required environment variables
 
-Add to `clinic-backend/.env` (never commit real secrets):
+Add to `clinic-management-system-backend/.env` (never commit real secrets):
 
 ```bash
 # MSG91 (WhatsApp + SMS)
 MSG91_AUTH_KEY=
-MSG91_WHATSAPP_NUMBER=          # integrated WhatsApp number on MSG91
-MSG91_WHATSAPP_TEMPLATE_NAME=   # approved template name
-MSG91_WHATSAPP_NAMESPACE=       # optional
+MSG91_WHATSAPP_NUMBER=          # integrated WhatsApp number on MSG91 (e.g. 91XXXXXXXXXX)
+MSG91_WHATSAPP_TEMPLATE_NAME=   # approved Meta template name
+MSG91_WHATSAPP_REMINDER_TEMPLATE_NAME=  # optional; defaults to TEMPLATE_NAME
+MSG91_WHATSAPP_NAMESPACE=       # optional / from MSG91 dashboard
 MSG91_WHATSAPP_LANGUAGE=en
-MSG91_WHATSAPP_BODY_VARS=patientName,clinicName,doctorName
+# Must match {{1}}, {{2}}, ... order in your approved template:
+MSG91_WHATSAPP_BODY_VARS=patientName,clinicName,doctorName,dateLabel,timeSlot
+# Or one full-text variable:
+# MSG91_WHATSAPP_BODY_VARS=_message
 # Optional override:
 # MSG91_WHATSAPP_API_URL=https://api.msg91.com/api/v5/whatsapp/whatsapp-outbound-message/bulk/
 
@@ -43,6 +47,17 @@ COMMS_WEBHOOK_SECRET=
 # POST /api/webhooks/comms/resend?secret=...
 ```
 
+## MSG91 WhatsApp setup (automatic reminders)
+
+1. Create an MSG91 account and enable **WhatsApp**.
+2. Connect / verify your business WhatsApp number (`MSG91_WHATSAPP_NUMBER`).
+3. Create a **Utility** template (appointment confirmation / reminder), submit for Meta approval.
+4. Example template body (5 variables):
+   `Hello {{1}}, your appointment with Dr. {{3}} at {{2}} is on {{4}} at {{5}}.`
+5. Set `MSG91_WHATSAPP_BODY_VARS=patientName,clinicName,doctorName,dateLabel,timeSlot` to match.
+6. Put `MSG91_AUTH_KEY`, number, and template name in `.env` → **restart the backend**.
+7. Book a test appointment with a real patient phone → confirmation WhatsApp sends ~30s later via the reminder scheduler.
+
 ## Consent / opt-out
 
 Marketing campaigns respect `Patient.communicationPrefs`:
@@ -51,11 +66,14 @@ Marketing campaigns respect `Patient.communicationPrefs`:
 - `marketingOptOut` (blocks all marketing channels)
 - legacy `sendSms: false` also blocks SMS marketing
 
-Transactional purpose skips marketing opt-out checks (use carefully).
+Transactional purpose (appointment reminders) skips marketing opt-out checks.
 
 ## Scheduler
 
-The existing in-process scheduler (`reminderScheduler`) also processes campaign delivery batches every 60s (25 recipients per tick).
+The in-process scheduler (`reminderScheduler`) every ~60s:
+
+- processes due appointment confirmation/reminder WhatsApp sends via MSG91
+- processes campaign delivery batches (25 recipients per tick)
 
 ## How to verify a real message
 
@@ -65,14 +83,14 @@ The existing in-process scheduler (`reminderScheduler`) also processes campaign 
 4. Preview → confirm eligible count.
 5. **Send test** to your own phone/email.
 6. Confirm the provider dashboard shows the message and a provider message ID is returned.
-7. Confirm send to the single-patient audience (or use selected filter later).
-8. Open campaign detail — Sent / Failed / Provider ID should update from DB (and webhooks if configured).
+7. For reminders: book an appointment → wait ~30–60s → check patient WhatsApp + `NotificationLog` status `sent` with `provider: msg91`.
 
 ## Troubleshooting
 
 | Symptom | Likely cause |
 |---------|----------------|
 | 503 Provider not configured | Missing env vars |
+| Reminder `failed` / provider not configured | Empty `MSG91_*` in `.env` |
 | WhatsApp 502 | Template name/namespace/language mismatch or unapproved template |
 | SMS 502 | Sender ID / DLT template issues |
 | Email 502 | Resend domain not verified / bad `EMAIL_FROM` |

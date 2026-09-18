@@ -211,10 +211,34 @@ export const listPatientConsultations = asyncHandler(async (req, res) => {
   const patient = await loadPatient(req, req.params.patientId);
   const consultations = await Consultation.find({ patientId: patient._id, clinicId: patient.clinicId })
     .sort({ createdAt: -1 })
-    .limit(50)
-    .populate('doctorId', 'name');
+    .limit(100)
+    .populate('doctorId', 'name specialization')
+    .populate('appointmentId', 'appointmentDate timeSlot status');
+
   const prescriptions = await Prescription.find({ patientId: patient._id, clinicId: patient.clinicId })
     .sort({ createdAt: -1 })
-    .limit(50);
-  res.json({ success: true, consultations, prescriptions });
+    .limit(100)
+    .select('consultationId appointmentId items notes followUpInstructions createdAt');
+
+  const byConsult = new Map(
+    prescriptions
+      .filter((p) => p.consultationId)
+      .map((p) => [String(p.consultationId), p])
+  );
+
+  const enriched = consultations.map((c) => {
+    const obj = c.toObject();
+    const rx = byConsult.get(String(c._id));
+    obj.prescription = rx
+      ? {
+          _id: rx._id,
+          items: rx.items || [],
+          notes: rx.notes || '',
+          followUpInstructions: rx.followUpInstructions || '',
+        }
+      : null;
+    return obj;
+  });
+
+  res.json({ success: true, consultations: enriched, prescriptions });
 });
