@@ -127,6 +127,7 @@ async function createReminderIfMissing({
 
 /**
  * Schedule confirmation + pre-appointment reminders (idempotent).
+ * Confirmation always schedules before any reminder for the same visit.
  */
 export const scheduleAppointmentReminder = async (appointment) => {
   if (!appointment?._id) return null;
@@ -150,24 +151,34 @@ export const scheduleAppointmentReminder = async (appointment) => {
   const now = new Date();
   const created = [];
 
-  if (sendConfirmation) {
-    const confirmAt = new Date(Math.min(now.getTime() + 30 * 1000, appointmentAt.getTime() - 1000));
-    if (appointmentAt > now) {
-      created.push(
-        await createReminderIfMissing({
-          appointment,
-          notificationType: 'appointment_confirmation',
-          scheduledAt: confirmAt,
-          parties,
-        })
-      );
-    }
+  // Confirmation goes out first (about 20s after booking).
+  let confirmAt = null;
+  if (sendConfirmation && appointmentAt > now) {
+    confirmAt = new Date(Math.min(now.getTime() + 20 * 1000, appointmentAt.getTime() - 1000));
+    created.push(
+      await createReminderIfMissing({
+        appointment,
+        notificationType: 'appointment_confirmation',
+        scheduledAt: confirmAt,
+        parties,
+      })
+    );
   }
+
+  // Catch-up reminders (when "24h before" is already past) must wait until
+  // after confirmation so WhatsApp never shows reminder before confirmed.
+  const catchUpFloor = new Date(
+    Math.max(now.getTime() + 2 * 60 * 1000, (confirmAt?.getTime() || now.getTime()) + 90 * 1000)
+  );
 
   for (const hoursBefore of hoursList) {
     let scheduledAt = new Date(appointmentAt.getTime() - Number(hoursBefore) * 60 * 60 * 1000);
     if (scheduledAt < now && appointmentAt > now) {
-      scheduledAt = new Date(now.getTime() + 60 * 1000);
+      scheduledAt = catchUpFloor;
+    }
+    // Never schedule a reminder before confirmation for the same visit.
+    if (confirmAt && scheduledAt <= confirmAt) {
+      scheduledAt = new Date(confirmAt.getTime() + 90 * 1000);
     }
     if (appointmentAt <= now) continue;
 
@@ -218,13 +229,35 @@ export const processDueReminders = async ({ clinicId = null } = {}) => {
   };
   if (clinicId) dueFilter.clinicId = clinicId;
 
-  const due = await NotificationLog.find(dueFilter).limit(50);
+  const due = await NotificationLog.find(dueFilter)
+    .sort({ scheduledAt: 1, createdAt: 1 })
+    .limit(50);
+
+  // Confirmations before reminders when both are due in the same tick.
+  due.sort((a, b) => {
+    const rank = (type) => (type === 'appointment_confirmation' ? 0 : type === 'appointment_reminder' ? 1 : 2);
+    const byType = rank(a.notificationType) - rank(b.notificationType);
+    if (byType !== 0) return byType;
+    return new Date(a.scheduledAt) - new Date(b.scheduledAt);
+  });
 
   let processed = 0;
   const whatsappReady = getCommsConfigStatus().whatsapp.configured;
 
   for (const log of due) {
     try {
+      // Hold reminder until confirmation for this appointment is sent (or none exists).
+      if (log.notificationType === 'appointment_reminder' && log.appointmentId) {
+        const pendingConfirm = await NotificationLog.findOne({
+          appointmentId: log.appointmentId,
+          notificationType: 'appointment_confirmation',
+          status: { $in: ['scheduled', 'pending'] },
+        }).select('_id');
+        if (pendingConfirm) {
+          continue;
+        }
+      }
+
       const appointment = await Appointment.findById(log.appointmentId)
         .populate('doctor', 'name phone')
         .populate('patientId', 'name phone')
