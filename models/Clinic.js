@@ -53,6 +53,30 @@ const clinicSchema = new mongoose.Schema(
       default: '',
       trim: true,
     },
+    /** Doctor submits → Super Admin creates on MSG91 → approves for this clinic only. */
+    whatsappCampaignTemplate: {
+      status: {
+        type: String,
+        enum: ['none', 'draft', 'pending', 'approved', 'rejected'],
+        default: 'none',
+      },
+      /** Doctor’s requested MSG91/Meta template name */
+      requestedName: { type: String, default: '', trim: true },
+      /** Suggested body text for Super Admin to paste into MSG91 (may include {{1}} {{2}}) */
+      sampleBody: { type: String, default: '', trim: true },
+      /** Doctor’s suggested variable order, e.g. patientName,clinicName,_message */
+      requestedBodyVars: { type: String, default: 'patientName,clinicName,_message', trim: true },
+      language: { type: String, default: 'en', trim: true },
+      category: { type: String, default: 'MARKETING', trim: true },
+      submittedAt: { type: Date, default: null },
+      submittedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+      /** Exact name after Super Admin confirms MSG91 Approval */
+      approvedName: { type: String, default: '', trim: true },
+      approvedBodyVars: { type: String, default: '', trim: true },
+      reviewNote: { type: String, default: '', trim: true },
+      reviewedAt: { type: Date, default: null },
+      reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    },
     website: { type: String, default: '', trim: true },
     registrationNumber: { type: String, default: '', trim: true },
     gstNumber: { type: String, default: '', trim: true },

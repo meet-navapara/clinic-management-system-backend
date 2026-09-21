@@ -12,7 +12,7 @@ import {
   canAccessBranch,
 } from '../utils/branchScope.js';
 import { isStaffAccount } from '../utils/permissions.js';
-import { parsePagination, paginated } from '../utils/pagination.js';
+import { parsePagination, paginated, escapeRegex } from '../utils/pagination.js';
 import { resolveCampaignAudience, classifyAudience } from '../utils/campaignAudience.js';
 import { writeAudit, AUDIT } from '../utils/audit.js';
 import { getCommsConfigStatus, assertChannelConfigured } from '../utils/comms/providers.js';
@@ -28,8 +28,78 @@ import {
   assertSupportedVariables,
 } from '../utils/comms/renderTemplate.js';
 
-export const getIntegrationsStatus = asyncHandler(async (_req, res) => {
-  res.json({ success: true, integrations: getCommsConfigStatus() });
+export const getIntegrationsStatus = asyncHandler(async (req, res) => {
+  const clinic = await Clinic.findById(req.user.clinicId);
+  res.json({ success: true, integrations: getCommsConfigStatus(clinic) });
+});
+
+export const getCampaignWhatsAppTemplate = asyncHandler(async (req, res) => {
+  const clinic = await Clinic.findById(req.user.clinicId);
+  if (!clinic) return res.status(404).json({ success: false, message: 'Clinic not found.' });
+  res.json({
+    success: true,
+    template: clinic.whatsappCampaignTemplate || { status: 'none' },
+    integrations: getCommsConfigStatus(clinic),
+  });
+});
+
+export const submitCampaignWhatsAppTemplate = asyncHandler(async (req, res) => {
+  if (req.user.role !== 'doctor') {
+    return res.status(403).json({
+      success: false,
+      message: 'Only the clinic doctor can submit a WhatsApp campaign template.',
+    });
+  }
+  const clinic = await Clinic.findById(req.user.clinicId);
+  if (!clinic) return res.status(404).json({ success: false, message: 'Clinic not found.' });
+
+  const requestedName = String(req.body.requestedName || '').trim().toLowerCase().replace(/\s+/g, '_');
+  const sampleBody = String(req.body.sampleBody || '').trim();
+  const requestedBodyVars = String(req.body.requestedBodyVars || 'patientName,clinicName,_message').trim();
+  const language = String(req.body.language || 'en').trim() || 'en';
+  const category = String(req.body.category || 'MARKETING').trim().toUpperCase() || 'MARKETING';
+
+  if (!requestedName || requestedName.length < 3) {
+    return res.status(422).json({
+      success: false,
+      message: 'Enter a template name (letters, numbers, underscores) as you will create it on MSG91.',
+    });
+  }
+  if (!sampleBody || sampleBody.length < 10) {
+    return res.status(422).json({
+      success: false,
+      message: 'Paste the template body Super Admin should create on MSG91 (include {{1}}, {{2}}, …).',
+    });
+  }
+  if (clinic.whatsappCampaignTemplate?.status === 'pending') {
+    return res.status(400).json({
+      success: false,
+      message: 'A template is already pending Super Admin approval.',
+    });
+  }
+
+  clinic.whatsappCampaignTemplate = {
+    status: 'pending',
+    requestedName,
+    sampleBody,
+    requestedBodyVars,
+    language,
+    category,
+    submittedAt: new Date(),
+    submittedBy: req.user._id,
+    approvedName: '',
+    approvedBodyVars: '',
+    reviewNote: '',
+    reviewedAt: null,
+    reviewedBy: null,
+  };
+  await clinic.save();
+
+  res.json({
+    success: true,
+    template: clinic.whatsappCampaignTemplate,
+    message: 'Submitted for Super Admin. They will create/approve it on MSG91, then approve it for your clinic.',
+  });
 });
 
 export const listCampaigns = asyncHandler(async (req, res) => {
@@ -37,6 +107,9 @@ export const listCampaigns = asyncHandler(async (req, res) => {
   const filter = tenantFilter(req.user, req.branchId);
   if (req.query.status) filter.status = req.query.status;
   if (req.query.channel) filter.channel = req.query.channel;
+  if (req.query.q?.trim()) {
+    filter.name = new RegExp(escapeRegex(req.query.q.trim()), 'i');
+  }
   const [rows, total] = await Promise.all([
     Campaign.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).populate('createdBy', 'name'),
     Campaign.countDocuments(filter),
@@ -49,6 +122,10 @@ export const getCampaign = asyncHandler(async (req, res) => {
   if (!campaign) return res.status(404).json({ success: false, message: 'Campaign not found.' });
   assertSameClinic(req.user, campaign.clinicId);
   assertBranchAccess(req.user, campaign.branchId);
+  if (campaign.channel === 'sms') {
+    campaign.channel = 'whatsapp';
+    await campaign.save().catch(() => {});
+  }
   const { page, limit, skip } = parsePagination(req.query);
   const statusFilter = req.query.deliveryStatus ? { status: req.query.deliveryStatus } : {};
   const [deliveries, total] = await Promise.all([
@@ -87,7 +164,7 @@ export const getCampaign = asyncHandler(async (req, res) => {
     page,
     pages: Math.ceil(total / limit) || 1,
     analytics,
-    integrations: getCommsConfigStatus(),
+    integrations: getCommsConfigStatus(await Clinic.findById(campaign.clinicId)),
   });
 });
 
@@ -107,6 +184,14 @@ export const createCampaign = asyncHandler(async (req, res) => {
     return res.status(403).json({ success: false, message: 'You do not have access to this branch.' });
   }
 
+  if (body.channel === 'sms') {
+    return res.status(400).json({
+      success: false,
+      message: 'SMS campaigns are not supported. Use WhatsApp or Email.',
+    });
+  }
+  const channel = body.channel === 'email' ? 'email' : 'whatsapp';
+
   const campaign = await Campaign.create({
     clinicId: req.user.clinicId,
     branchId,
@@ -116,7 +201,7 @@ export const createCampaign = asyncHandler(async (req, res) => {
     purpose: body.purpose || 'marketing',
     message: String(body.message).trim(),
     subject: body.subject || '',
-    channel: body.channel || 'whatsapp',
+    channel,
     audienceType: body.audienceType || 'all',
     audienceFilter: body.audienceFilter || {},
     scheduledAt: body.scheduledAt || null,
@@ -151,6 +236,13 @@ export const updateCampaign = asyncHandler(async (req, res) => {
   for (const field of fields) {
     if (req.body[field] !== undefined) campaign[field] = req.body[field];
   }
+  // Legacy SMS campaigns: migrate to WhatsApp on save (new SMS creates still blocked).
+  if (req.body.channel === 'sms' || campaign.channel === 'sms') {
+    campaign.channel = 'whatsapp';
+  }
+  if (campaign.channel !== 'email' && campaign.channel !== 'whatsapp') {
+    campaign.channel = 'whatsapp';
+  }
   if (campaign.message) assertSupportedVariables(campaign.message);
   if (campaign.subject) assertSupportedVariables(campaign.subject);
   if (isStaffAccount(req.user) && campaign.audienceFilter?.branchId) {
@@ -167,6 +259,11 @@ export const previewCampaign = asyncHandler(async (req, res) => {
   if (!campaign) return res.status(404).json({ success: false, message: 'Campaign not found.' });
   assertSameClinic(req.user, campaign.clinicId);
   assertBranchAccess(req.user, campaign.branchId);
+
+  if (campaign.channel === 'sms') {
+    campaign.channel = 'whatsapp';
+    await campaign.save().catch(() => {});
+  }
 
   const patients = await resolveCampaignAudience(campaign.clinicId, campaign, req.user);
   const classified = classifyAudience(patients, campaign.channel, campaign.purpose || 'marketing');
@@ -199,9 +296,13 @@ export const previewCampaign = asyncHandler(async (req, res) => {
     return res.status(422).json({ success: false, message: err.message });
   }
 
-  const integrations = getCommsConfigStatus();
+  const clinicDoc = await Clinic.findById(campaign.clinicId);
+  const integrations = getCommsConfigStatus(clinicDoc);
   const channelKey = campaign.channel;
-  const channelConfigured = integrations[channelKey]?.configured === true;
+  const channelConfigured =
+    channelKey === 'whatsapp'
+      ? integrations.whatsapp?.campaign?.configured === true
+      : integrations[channelKey]?.configured === true;
 
   res.json({
     success: true,
@@ -220,7 +321,8 @@ export const previewCampaign = asyncHandler(async (req, res) => {
     messagePreview,
     subject: campaign.subject,
     channelConfigured,
-    integrationStatus: integrations[channelKey],
+    integrationStatus:
+      channelKey === 'whatsapp' ? integrations.whatsapp?.campaign : integrations[channelKey],
   });
 });
 
@@ -236,14 +338,18 @@ export const sendCampaign = asyncHandler(async (req, res) => {
     return res.status(400).json({ success: false, message: 'Campaign already sent or in progress.' });
   }
 
+  const clinicForSend = await Clinic.findById(campaign.clinicId);
   try {
-    assertChannelConfigured(campaign.channel);
+    assertChannelConfigured(campaign.channel, {
+      clinic: clinicForSend,
+      purpose: campaign.channel === 'whatsapp' ? 'campaign' : 'appointment',
+    });
   } catch (err) {
     return res.status(err.status || 503).json({
       success: false,
       message: err.message,
-      code: 'PROVIDER_NOT_CONFIGURED',
-      integrations: getCommsConfigStatus(),
+      code: err.code || 'PROVIDER_NOT_CONFIGURED',
+      integrations: getCommsConfigStatus(clinicForSend),
     });
   }
 
@@ -306,30 +412,40 @@ export const testCampaign = asyncHandler(async (req, res) => {
   assertBranchAccess(req.user, campaign.branchId);
 
   const { toPhone, toEmail } = req.body || {};
+  const clinic = await Clinic.findById(campaign.clinicId);
   try {
-    assertChannelConfigured(campaign.channel);
+    assertChannelConfigured(campaign.channel, {
+      clinic,
+      purpose: campaign.channel === 'whatsapp' ? 'campaign' : 'appointment',
+    });
   } catch (err) {
     return res.status(err.status || 503).json({
       success: false,
       message: err.message,
-      code: 'PROVIDER_NOT_CONFIGURED',
+      code: err.code || 'PROVIDER_NOT_CONFIGURED',
     });
   }
 
   if (campaign.channel === 'email' && !toEmail) {
     return res.status(422).json({ success: false, message: 'Enter a test email address.' });
   }
-  if ((campaign.channel === 'whatsapp' || campaign.channel === 'sms') && !toPhone) {
+  if (campaign.channel === 'whatsapp' && !toPhone) {
     return res.status(422).json({ success: false, message: 'Enter a test phone number.' });
   }
+  if (campaign.channel === 'sms') {
+    return res.status(400).json({
+      success: false,
+      message: 'SMS campaigns are not supported. Use WhatsApp or Email.',
+    });
+  }
 
-  const clinic = await Clinic.findById(campaign.clinicId).select('name');
   const result = await sendTestMessage({
     channel: campaign.channel,
     toPhone,
     toEmail,
     message: campaign.message,
     subject: campaign.subject || `Test: ${campaign.name}`,
+    clinic,
     context: buildRecipientContext({
       patient: { name: 'Test Patient' },
       doctorName: req.user.name || 'Doctor',
@@ -369,7 +485,10 @@ export const retryFailed = asyncHandler(async (req, res) => {
   assertSameClinic(req.user, campaign.clinicId);
   assertBranchAccess(req.user, campaign.branchId);
   try {
-    assertChannelConfigured(campaign.channel);
+    assertChannelConfigured(campaign.channel, {
+      clinic: await Clinic.findById(campaign.clinicId),
+      purpose: campaign.channel === 'whatsapp' ? 'campaign' : 'appointment',
+    });
   } catch (err) {
     return res.status(err.status || 503).json({ success: false, message: err.message });
   }
@@ -404,7 +523,7 @@ export const duplicateCampaign = asyncHandler(async (req, res) => {
     purpose: source.purpose,
     message: source.message,
     subject: source.subject,
-    channel: source.channel,
+    channel: source.channel === 'email' ? 'email' : 'whatsapp',
     audienceType: source.audienceType,
     audienceFilter: source.audienceFilter,
     status: 'draft',

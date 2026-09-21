@@ -6,6 +6,7 @@ import {
   updateAppointmentStatus,
   rescheduleAppointment,
   getWhatsAppLink,
+  sendAppointmentWhatsApp,
   findClinicPatient,
   getDoctorDashboardStats,
 } from '../controllers/appointmentController.js';
@@ -55,5 +56,11 @@ router.patch(
   rescheduleAppointment
 );
 router.get('/:id/whatsapp', requireClinicUser, requirePermission(P.APPOINTMENTS_VIEW), getWhatsAppLink);
+router.post(
+  '/:id/whatsapp',
+  requireClinicUser,
+  requirePermission(P.APPOINTMENTS_MANAGE, P.APPOINTMENTS_VIEW),
+  sendAppointmentWhatsApp
+);
 
 export default router;

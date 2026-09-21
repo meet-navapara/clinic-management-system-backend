@@ -27,6 +27,7 @@ const consultationSchema = new mongoose.Schema(
     treatment: { type: String, default: '', trim: true },
     advice: { type: String, default: '', trim: true },
     followUp: { type: String, default: '', trim: true },
+    instructions: { type: String, default: '', trim: true },
     vitals: { type: vitalsSchema, default: () => ({}) },
     status: { type: String, enum: ['draft', 'completed'], default: 'draft', index: true },
     completedAt: { type: Date, default: null },

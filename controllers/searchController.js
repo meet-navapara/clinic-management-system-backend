@@ -2,7 +2,6 @@ import Patient from '../models/Patient.js';
 import Appointment from '../models/Appointment.js';
 import Invoice from '../models/Invoice.js';
 import User from '../models/User.js';
-import Medicine from '../models/Medicine.js';
 import { asyncHandler } from '../middleware/access.js';
 import { clinicQuery, tenantFilter } from '../utils/branchScope.js';
 import { escapeRegex } from '../utils/pagination.js';
@@ -84,16 +83,6 @@ export const globalSearch = asyncHandler(async (req, res) => {
       $or: [{ name: rx }, { email: rx }, { phone: rx }, { specialization: rx }],
     })
       .select('name role email specialization')
-      .limit(8);
-  }
-
-  if (hasPermission(req.user, P.MEDICINE_USE) || hasPermission(req.user, P.MEDICINE_MANAGE)) {
-    tasks.medicines = Medicine.find({
-      ...clinic,
-      isActive: true,
-      $or: [{ name: rx }, { genericName: rx }, { category: rx }],
-    })
-      .select('name genericName strength dosageForm')
       .limit(8);
   }
 

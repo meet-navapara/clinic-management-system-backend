@@ -397,8 +397,13 @@ export const staffCreateValidation = [
 
 export const paymentValidation = [
   body('amount').notEmpty().withMessage('Amount is required').isFloat({ gt: 0 }).withMessage('Amount must be greater than 0'),
-  body('paymentMethod').optional().trim().isLength({ max: 40 }),
+  body('paymentMethod')
+    .optional()
+    .trim()
+    .isIn(['cash', 'upi', 'card', 'bank_transfer', 'online', 'other'])
+    .withMessage('Invalid payment method.'),
   body('notes').optional().trim().isLength({ max: 500 }),
+  body('transactionReference').optional().trim().isLength({ max: 120 }),
 ];
 
 export const branchCreateValidation = [

@@ -6,6 +6,8 @@ import {
   getAdminDashboard,
   listDisabledStaff,
   setStaffApproval,
+  listCampaignWhatsAppTemplates,
+  reviewCampaignWhatsAppTemplate,
 } from '../controllers/adminController.js';
 import { protect, authorize } from '../middleware/auth.js';
 
@@ -20,5 +22,7 @@ router.get('/doctors/:id', getDoctorDetail);
 router.patch('/doctors/:id/approval', setDoctorApproval);
 router.get('/staff', listDisabledStaff);
 router.patch('/staff/:id/approval', setStaffApproval);
+router.get('/campaign-whatsapp-templates', listCampaignWhatsAppTemplates);
+router.patch('/campaign-whatsapp-templates/:clinicId', reviewCampaignWhatsAppTemplate);
 
 export default router;

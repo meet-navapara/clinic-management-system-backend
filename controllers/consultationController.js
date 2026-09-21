@@ -11,6 +11,8 @@ import { recordPatientEvent } from '../utils/patientTimeline.js';
 import { computeInvoiceTotals } from '../utils/money.js';
 import { nextSequence } from '../models/Counter.js';
 import User from '../models/User.js';
+import { cancelAppointmentReminders } from '../utils/notificationService.js';
+import { hasPermission, P } from '../utils/permissions.js';
 
 const pad = (n) => String(n).padStart(5, '0');
 
@@ -31,12 +33,28 @@ export const upsertConsultation = asyncHandler(async (req, res) => {
   const patient = await loadPatient(req, patientId);
   let consultation = req.body.id ? await Consultation.findById(req.body.id) : null;
   if (!consultation && appointmentId) {
-    consultation = await Consultation.findOne({ appointmentId, doctorId: req.user.role === 'doctor' ? req.user._id : { $exists: true } });
+    const findFilter = { appointmentId };
+    if (req.user.role === 'doctor') findFilter.doctorId = req.user._id;
+    consultation = await Consultation.findOne(findFilter);
   }
+
+  let appointmentDoctorId = null;
+  if (appointmentId) {
+    const appt = await Appointment.findById(appointmentId).select('doctor clinicId branchId patientId');
+    if (appt) {
+      assertSameClinic(req.user, appt.clinicId);
+      assertBranchAccess(req.user, appt.branchId);
+      appointmentDoctorId = appt.doctor;
+    }
+  }
+
   const payload = {
     clinicId: patient.clinicId,
     branchId: patient.branchId || req.branchId,
-    doctorId: req.user.role === 'doctor' ? req.user._id : req.body.doctorId || patient.doctorId,
+    doctorId:
+      req.user.role === 'doctor'
+        ? req.user._id
+        : req.body.doctorId || appointmentDoctorId || patient.doctorId,
     patientId: patient._id,
     appointmentId: appointmentId || null,
     templateId: req.body.templateId || null,
@@ -47,15 +65,21 @@ export const upsertConsultation = asyncHandler(async (req, res) => {
     treatment: req.body.treatment || '',
     advice: req.body.advice || '',
     followUp: req.body.followUp || '',
+    instructions: req.body.instructions || '',
     vitals: req.body.vitals || {},
     status: req.body.status === 'completed' ? 'completed' : 'draft',
   };
+  if (!payload.doctorId) {
+    return res.status(400).json({ success: false, message: 'Doctor is required for consultation.' });
+  }
   if (payload.status === 'completed') payload.completedAt = new Date();
 
   if (consultation) {
     assertSameClinic(req.user, consultation.clinicId);
     assertBranchAccess(req.user, consultation.branchId);
-    Object.assign(consultation, payload);
+    // Keep the original consulting doctor; staff must not reassign mid-visit.
+    const { doctorId: _ignoreDoctor, ...safePayload } = payload;
+    Object.assign(consultation, safePayload);
     await consultation.save();
   } else {
     consultation = await Consultation.create(payload);
@@ -64,7 +88,17 @@ export const upsertConsultation = asyncHandler(async (req, res) => {
   let prescription = null;
   if (Array.isArray(req.body.medicines)) {
     prescription = await Prescription.findOne({ consultationId: consultation._id });
-    const items = req.body.medicines.filter((m) => m?.name);
+    const items = req.body.medicines
+      .filter((m) => m?.name)
+      .map((m) => ({
+        name: String(m.name).trim(),
+        dosage: String(m.dosage || '').trim(),
+        frequency: String(m.frequency || '').trim(),
+        duration: String(m.duration || '').trim(),
+        instructions: String(m.instructions || '').trim(),
+        quantity: Number(m.quantity) || 0,
+        medicineId: null,
+      }));
     if (prescription) {
       prescription.items = items;
       prescription.notes = req.body.prescriptionNotes || '';
@@ -127,6 +161,7 @@ export const upsertConsultation = asyncHandler(async (req, res) => {
         appt.status = 'completed';
         await appt.save();
       }
+      await cancelAppointmentReminders(consultation.appointmentId).catch(() => {});
       await QueueTicket.updateMany(
         {
           appointmentId: consultation.appointmentId,
@@ -145,10 +180,14 @@ export const upsertConsultation = asyncHandler(async (req, res) => {
         { $set: { status: 'completed', completedAt: new Date() } }
       ).catch(() => {});
     }
-    if (req.body.createInvoice) {
-      const existing = consultation.appointmentId
-        ? await Invoice.findOne({ appointmentId: consultation.appointmentId, paymentStatus: { $ne: 'cancelled' } })
-        : null;
+    if (req.body.createInvoice && hasPermission(req.user, P.BILLING_MANAGE)) {
+      const existing = await Invoice.findOne({
+        paymentStatus: { $ne: 'cancelled' },
+        $or: [
+          ...(consultation.appointmentId ? [{ appointmentId: consultation.appointmentId }] : []),
+          { consultationId: consultation._id },
+        ],
+      });
       if (!existing) {
         const doctor = await User.findById(consultation.doctorId).select('consultationFee name');
         const fee = doctor?.consultationFee || 0;

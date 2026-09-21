@@ -11,14 +11,16 @@ function normalizeRooms(input, fallbackLabel = 'Room 1') {
     : typeof input === 'string'
       ? input.split(',')
       : [];
-  const cleaned = [
-    ...new Set(
-      list
-        .map((r) => String(r || '').trim())
-        .filter(Boolean)
-        .map((r) => r.slice(0, 80))
-    ),
-  ];
+  const cleaned = [];
+  const seen = new Set();
+  for (const raw of list) {
+    const label = String(raw || '').trim().slice(0, 80);
+    if (!label) continue;
+    const key = label.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    cleaned.push(label);
+  }
   if (cleaned.length) return cleaned;
   const fb = String(fallbackLabel || '').trim() || 'Room 1';
   return [fb];
@@ -117,9 +119,50 @@ export const updateBranch = asyncHandler(async (req, res) => {
     branch.roomLabel = roomLabel;
   }
   if (req.body.isDefault === true) {
-    await Branch.updateMany({ clinicId: branch.clinicId, _id: { $ne: branch._id } }, { $set: { isDefault: false } });
+    await Branch.updateMany(
+      { clinicId: branch.clinicId, _id: { $ne: branch._id } },
+      { $set: { isDefault: false } }
+    );
     branch.isDefault = true;
   }
+
+  if (req.body.isActive === false && branch.isActive !== false) {
+    const activeCount = await Branch.countDocuments({
+      clinicId: branch.clinicId,
+      isActive: true,
+    });
+    if (activeCount <= 1) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot deactivate the last active branch.',
+      });
+    }
+    const staffOnBranch = await User.countDocuments({
+      clinicId: branch.clinicId,
+      role: { $nin: ['doctor', 'super_admin', 'patient'] },
+      $or: [{ defaultBranchId: branch._id }, { branchIds: branch._id }],
+      loginEnabled: true,
+    });
+    if (staffOnBranch > 0) {
+      return res.status(400).json({
+        success: false,
+        message: `Reassign ${staffOnBranch} staff member(s) before deactivating this branch.`,
+      });
+    }
+    if (branch.isDefault) {
+      const nextDefault = await Branch.findOne({
+        clinicId: branch.clinicId,
+        _id: { $ne: branch._id },
+        isActive: true,
+      }).sort({ createdAt: 1 });
+      if (nextDefault) {
+        nextDefault.isDefault = true;
+        await nextDefault.save();
+        branch.isDefault = false;
+      }
+    }
+  }
+
   await branch.save();
   res.json({ success: true, branch });
 });

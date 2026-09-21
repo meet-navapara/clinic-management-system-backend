@@ -16,7 +16,11 @@ export async function queueCampaignDeliveries(campaign, user) {
   if (campaign.channel === 'email' && campaign.subject) {
     assertSupportedVariables(campaign.subject);
   }
-  assertChannelConfigured(campaign.channel);
+  const clinic = await Clinic.findById(campaign.clinicId);
+  assertChannelConfigured(campaign.channel, {
+    clinic,
+    purpose: campaign.channel === 'whatsapp' ? 'campaign' : 'appointment',
+  });
 
   const patients = await resolveCampaignAudience(campaign.clinicId, campaign, user);
   const classified = classifyAudience(patients, campaign.channel, campaign.purpose || 'marketing');
@@ -80,14 +84,23 @@ export async function queueCampaignDeliveries(campaign, user) {
 
 async function loadSendContext(campaign) {
   const [clinic, branch, doctor] = await Promise.all([
-    Clinic.findById(campaign.clinicId).select('name'),
+    Clinic.findById(campaign.clinicId).select('name whatsappCampaignTemplate'),
     campaign.branchId ? Branch.findById(campaign.branchId).select('name') : null,
     campaign.createdBy ? User.findById(campaign.createdBy).select('name') : null,
   ]);
+  const tpl = clinic?.whatsappCampaignTemplate;
   return {
+    clinic,
     clinicName: clinic?.name || '',
     branchName: branch?.name || '',
     doctorName: doctor?.name || '',
+    campaignTemplateName: tpl?.status === 'approved' ? String(tpl.approvedName || '').trim() : '',
+    campaignBodyVars:
+      tpl?.status === 'approved'
+        ? String(tpl.approvedBodyVars || tpl.requestedBodyVars || 'patientName,clinicName,_message').trim()
+        : '',
+    campaignLanguage:
+      tpl?.status === 'approved' ? String(tpl.language || 'en').trim() || 'en' : '',
   };
 }
 
@@ -119,17 +132,20 @@ export async function processOneDelivery(delivery, campaign, ctx) {
         toPhone: delivery.recipientPhone,
         bodyText,
         context,
+        templateKind: 'campaign',
+        campaignTemplateName: ctx.campaignTemplateName,
+        campaignBodyVars: ctx.campaignBodyVars,
+        campaignLanguage: ctx.campaignLanguage,
       });
-    } else if (campaign.channel === 'sms') {
-      if (!indianMobileDigits(delivery.recipientPhone)) throw Object.assign(new Error('Invalid phone'), { status: 422 });
-      result = await sendViaChannel('sms', { toPhone: delivery.recipientPhone, bodyText });
-    } else {
+    } else if (campaign.channel === 'email') {
       if (!normalizeEmail(delivery.recipientEmail)) throw Object.assign(new Error('Invalid email'), { status: 422 });
       result = await sendViaChannel('email', {
         toEmail: delivery.recipientEmail,
         subject,
         text: bodyText,
       });
+    } else {
+      throw Object.assign(new Error('SMS campaigns are not supported. Use WhatsApp or Email.'), { status: 400 });
     }
 
     delivery.status = 'sent';
@@ -225,30 +241,67 @@ export async function processDueCampaigns() {
 
   let total = 0;
   for (const campaign of due) {
+    if (campaign.channel === 'sms') {
+      campaign.status = 'cancelled';
+      await campaign.save().catch(() => {});
+      await CampaignDelivery.updateMany(
+        { campaignId: campaign._id, status: 'queued' },
+        { $set: { status: 'skipped', failureReason: 'SMS campaigns are no longer supported' } }
+      ).catch(() => {});
+      continue;
+    }
     if (campaign.status === 'scheduled') {
       campaign.status = 'processing';
       await campaign.save();
     }
     const { processed } = await processCampaignQueue(campaign._id, { limit: BATCH_SIZE });
     total += processed;
-    // Continue batches on subsequent ticks
   }
   return total;
 }
 
-export async function sendTestMessage({ channel, toPhone, toEmail, message, subject, context }) {
-  assertChannelConfigured(channel);
+export async function sendTestMessage({
+  channel,
+  toPhone,
+  toEmail,
+  message,
+  subject,
+  context,
+  clinic = null,
+}) {
+  assertChannelConfigured(channel, {
+    clinic,
+    purpose: channel === 'whatsapp' ? 'campaign' : 'appointment',
+  });
   assertSupportedVariables(message || '');
   const bodyText = renderTemplate(message || 'Test message from clinic', context || {});
   if (channel === 'whatsapp') {
-    return sendViaChannel('whatsapp', { toPhone, bodyText, context: context || {} });
+    const tpl = clinic?.whatsappCampaignTemplate;
+    if (tpl?.status !== 'approved' || !String(tpl.approvedName || '').trim()) {
+      const err = new Error(
+        'Clinic campaign WhatsApp template is not approved yet. Ask Super Admin after MSG91 approval.'
+      );
+      err.status = 503;
+      throw err;
+    }
+    return sendViaChannel('whatsapp', {
+      toPhone,
+      bodyText,
+      context: context || {},
+      templateKind: 'campaign',
+      campaignTemplateName: tpl.approvedName,
+      campaignBodyVars: tpl.approvedBodyVars || tpl.requestedBodyVars || '',
+      campaignLanguage: tpl.language || 'en',
+    });
   }
-  if (channel === 'sms') {
-    return sendViaChannel('sms', { toPhone, bodyText });
+  if (channel === 'email') {
+    return sendViaChannel('email', {
+      toEmail,
+      subject: subject || 'Clinic test message',
+      text: bodyText,
+    });
   }
-  return sendViaChannel('email', {
-    toEmail,
-    subject: subject || 'Clinic test message',
-    text: bodyText,
-  });
+  const err = new Error('SMS campaigns are not supported. Use WhatsApp or Email.');
+  err.status = 400;
+  throw err;
 }

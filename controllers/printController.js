@@ -179,7 +179,12 @@ export const uploadPrintAsset = asyncHandler(async (req, res) => {
   if (isCloudinaryConfigured()) {
     const folder = `clinic-management/${clinicId}/print`;
     const publicId = kind === 'logo' ? 'clinic-logo' : 'doctor-signature';
-    const result = await uploadImageBuffer(req.file.buffer, { folder, publicId });
+    // Keep PNG so clinic logos / signatures stay transparent on letterheads.
+    const result = await uploadImageBuffer(req.file.buffer, {
+      folder,
+      publicId,
+      preserveTransparency: true,
+    });
     url = result.secure_url;
   } else {
     // Local/dev fallback when Cloudinary env vars are missing

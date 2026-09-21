@@ -5,7 +5,7 @@ const campaignDeliverySchema = new mongoose.Schema(
     clinicId: { type: mongoose.Schema.Types.ObjectId, ref: 'Clinic', required: true, index: true },
     campaignId: { type: mongoose.Schema.Types.ObjectId, ref: 'Campaign', required: true, index: true },
     patientId: { type: mongoose.Schema.Types.ObjectId, ref: 'Patient', required: true, index: true },
-    channel: { type: String, enum: ['whatsapp', 'sms', 'email'], required: true },
+    channel: { type: String, enum: ['whatsapp', 'email', 'sms'], required: true },
     recipientPhone: { type: String, default: '' },
     recipientEmail: { type: String, default: '' },
     recipientName: { type: String, default: '' },

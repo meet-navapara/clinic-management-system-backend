@@ -4,7 +4,7 @@ import Medicine from '../models/Medicine.js';
 import Clinic from '../models/Clinic.js';
 import { asyncHandler } from '../middleware/access.js';
 import { tenantFilter, assertSameClinic, assertBranchAccess } from '../utils/branchScope.js';
-import { parsePagination, paginated } from '../utils/pagination.js';
+import { parsePagination, paginated, escapeRegex } from '../utils/pagination.js';
 import { applyStockChange } from '../utils/inventoryStock.js';
 import { writeAudit, AUDIT } from '../utils/audit.js';
 
@@ -50,7 +50,16 @@ export const stockSummary = asyncHandler(async (req, res) => {
         },
       },
       { $unwind: '$medicine' },
-      { $match: { $expr: { $lt: ['$quantity', '$medicine.minimumStockLevel'] } } },
+      {
+        $match: {
+          $expr: {
+            $and: [
+              { $gt: ['$medicine.minimumStockLevel', 0] },
+              { $lt: ['$quantity', '$medicine.minimumStockLevel'] },
+            ],
+          },
+        },
+      },
       { $limit: 50 },
     ]),
     InventoryLot.find({
@@ -84,15 +93,56 @@ export const stockSummary = asyncHandler(async (req, res) => {
 });
 
 export const stockIn = asyncHandler(async (req, res) => {
-  const { medicineId, batchNumber, quantity, purchasePrice, sellingPrice, expiryDate, supplier } = req.body;
-  if (!medicineId || !batchNumber || !quantity) {
-    return res.status(400).json({ success: false, message: 'medicineId, batchNumber and quantity are required.' });
+  const { batchNumber, purchasePrice, sellingPrice, expiryDate, supplier } = req.body;
+  let medicineId = req.body.medicineId || null;
+  const itemName = String(req.body.itemName || req.body.name || '').trim();
+  const quantity = Number(req.body.quantity);
+
+  if (!medicineId && !itemName) {
+    return res.status(400).json({ success: false, message: 'Item name is required.' });
+  }
+  if (!String(batchNumber || '').trim()) {
+    return res.status(400).json({ success: false, message: 'Batch number is required.' });
+  }
+  if (!Number.isFinite(quantity) || quantity < 1) {
+    return res.status(400).json({ success: false, message: 'Quantity must be at least 1.' });
   }
   if (!req.branchId) {
     return res.status(400).json({ success: false, message: 'Select a branch before adding stock.' });
   }
+
+  let minLevel;
+  if (req.body.minimumStockLevel !== undefined && req.body.minimumStockLevel !== '') {
+    minLevel = Math.max(0, Number(req.body.minimumStockLevel) || 0);
+  }
+
+  if (!medicineId && itemName) {
+    const nameRx = new RegExp(`^${escapeRegex(itemName)}$`, 'i');
+    let medicine = await Medicine.findOne({
+      clinicId: req.user.clinicId,
+      name: nameRx,
+      isActive: true,
+    });
+    if (!medicine) {
+      medicine = await Medicine.create({
+        clinicId: req.user.clinicId,
+        name: itemName,
+        genericName: itemName,
+        dosageForm: 'other',
+        // Clinical supplies: no low-stock alert unless staff sets a threshold.
+        minimumStockLevel: minLevel != null ? minLevel : 0,
+      });
+    } else if (minLevel != null) {
+      medicine.minimumStockLevel = minLevel;
+      await medicine.save();
+    }
+    medicineId = medicine._id;
+  } else if (medicineId && minLevel != null) {
+    await Medicine.findByIdAndUpdate(medicineId, { minimumStockLevel: minLevel });
+  }
+
   const medicine = await Medicine.findById(medicineId);
-  if (!medicine) return res.status(404).json({ success: false, message: 'Medicine not found.' });
+  if (!medicine) return res.status(404).json({ success: false, message: 'Item not found.' });
   assertSameClinic(req.user, medicine.clinicId);
 
   let lot = await InventoryLot.findOne({
@@ -138,7 +188,15 @@ export const stockIn = asyncHandler(async (req, res) => {
 });
 
 export const adjustStock = asyncHandler(async (req, res) => {
-  const { lotId, quantity, reason, type } = req.body;
+  const { lotId, reason, type } = req.body;
+  const quantity = Number(req.body.quantity);
+  if (!lotId) return res.status(400).json({ success: false, message: 'Lot is required.' });
+  if (!Number.isFinite(quantity) || quantity < 1) {
+    return res.status(400).json({ success: false, message: 'Quantity must be at least 1.' });
+  }
+  if (!String(reason || '').trim()) {
+    return res.status(400).json({ success: false, message: 'Reason is required.' });
+  }
   const lot = await InventoryLot.findById(lotId);
   if (!lot) return res.status(404).json({ success: false, message: 'Lot not found.' });
   assertSameClinic(req.user, lot.clinicId);
@@ -152,7 +210,7 @@ export const adjustStock = asyncHandler(async (req, res) => {
     type: txType,
     quantity,
     referenceType: 'adjustment',
-    reason: reason || 'Manual adjustment',
+    reason: String(reason).trim(),
     performedBy: req.user._id,
   });
   await writeAudit({

@@ -15,11 +15,15 @@ export const listConsentTemplates = asyncHandler(async (req, res) => {
 });
 
 export const createConsentTemplate = asyncHandler(async (req, res) => {
+  const name = String(req.body.name || '').trim();
+  const body = String(req.body.body || '').trim();
+  if (!name) return res.status(422).json({ success: false, message: 'Template name is required.' });
+  if (!body) return res.status(422).json({ success: false, message: 'Consent text is required.' });
   const template = await ConsentTemplate.create({
     clinicId: req.user.clinicId,
-    name: req.body.name,
+    name,
     category: req.body.category || 'general',
-    body: req.body.body,
+    body,
     version: 1,
   });
   res.status(201).json({ success: true, template });
@@ -46,7 +50,7 @@ export const assignConsent = asyncHandler(async (req, res) => {
   }
   assertSameClinic(req.user, template.clinicId);
   const patient = await Patient.findById(req.body.patientId);
-  if (!patient) return res.status(404).json({ success: false, message: 'Patient not found.' });
+  if (!patient || !patient.isActive) return res.status(404).json({ success: false, message: 'Patient not found.' });
   assertSameClinic(req.user, patient.clinicId);
   assertBranchAccess(req.user, patient.branchId);
 
@@ -76,6 +80,9 @@ export const signConsent = asyncHandler(async (req, res) => {
   }
   const status = req.body.status === 'rejected' ? 'rejected' : 'accepted';
   const signature = String(req.body.signatureDataUrl || '');
+  if (status === 'accepted' && !signature) {
+    return res.status(400).json({ success: false, message: 'Signature is required to accept consent.' });
+  }
   if (signature && !signature.startsWith('data:image/')) {
     return res.status(400).json({ success: false, message: 'Signature must be an image data URL.' });
   }

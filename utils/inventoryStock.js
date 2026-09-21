@@ -45,7 +45,7 @@ export async function applyStockChange({
   if (lot) {
     const next = (lot.quantity || 0) + delta;
     if (next < 0) {
-      const err = new Error(`Insufficient stock for this medicine (available: ${lot.quantity}).`);
+      const err = new Error(`Insufficient stock for this item (available: ${lot.quantity}).`);
       err.status = 400;
       throw err;
     }
@@ -63,7 +63,7 @@ export async function applyStockChange({
       sellingPrice: medicine?.sellingPrice || 0,
     });
   } else if (delta < 0) {
-    const err = new Error('No stock lot available for this medicine at this branch.');
+    const err = new Error('No stock lot available for this item at this branch.');
     err.status = 400;
     throw err;
   }

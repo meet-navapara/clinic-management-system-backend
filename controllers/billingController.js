@@ -35,6 +35,7 @@ async function nextReceiptNumber(clinicId) {
 }
 
 async function refreshInvoicePayment(invoice) {
+  const wasCancelled = invoice.paymentStatus === 'cancelled';
   const payments = await Payment.find({ invoiceId: invoice._id, status: { $in: ['completed', 'refunded'] } });
   let paid = 0;
   let refunded = 0;
@@ -44,11 +45,62 @@ async function refreshInvoicePayment(invoice) {
   }
   const derived = paymentStatusFromAmounts(invoice.total, paid, refunded);
   invoice.paidAmount = derived.paidAmount;
-  invoice.dueAmount = derived.dueAmount;
+  invoice.dueAmount = wasCancelled ? 0 : derived.dueAmount;
   invoice.refundedAmount = derived.refundedAmount;
-  invoice.paymentStatus = derived.paymentStatus;
+  // Never resurrect a cancelled invoice from payment math.
+  invoice.paymentStatus = wasCancelled ? 'cancelled' : derived.paymentStatus;
   await invoice.save();
   return invoice;
+}
+
+/** Net collections by payment method (completed − refunded) for a paymentDate window. */
+async function collectionsByMethod(matchBase, from, to) {
+  const match = { ...matchBase };
+  if (from || to) {
+    match.paymentDate = {};
+    if (from) match.paymentDate.$gte = new Date(from);
+    if (to) {
+      const end = new Date(to);
+      end.setHours(23, 59, 59, 999);
+      match.paymentDate.$lte = end;
+    }
+  }
+  match.status = { $in: ['completed', 'refunded'] };
+
+  const rows = await Payment.aggregate([
+    { $match: match },
+    {
+      $group: {
+        _id: '$paymentMethod',
+        completed: {
+          $sum: { $cond: [{ $eq: ['$status', 'completed'] }, '$amount', 0] },
+        },
+        refunded: {
+          $sum: { $cond: [{ $eq: ['$status', 'refunded'] }, '$amount', 0] },
+        },
+        count: {
+          $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] },
+        },
+      },
+    },
+  ]);
+
+  const METHODS = ['cash', 'upi', 'card', 'bank_transfer', 'online', 'other'];
+  const byId = Object.fromEntries(rows.map((r) => [r._id, r]));
+  const byMethod = METHODS.map((id) => {
+    const row = byId[id] || { completed: 0, refunded: 0, count: 0 };
+    return {
+      _id: id,
+      method: id,
+      amount: roundMoney((row.completed || 0) - (row.refunded || 0)),
+      completed: roundMoney(row.completed || 0),
+      refunded: roundMoney(row.refunded || 0),
+      count: row.count || 0,
+    };
+  });
+  const collected = roundMoney(byMethod.reduce((s, m) => s + m.amount, 0));
+  const paymentCount = byMethod.reduce((s, m) => s + m.count, 0);
+  return { byMethod, collected, paymentCount };
 }
 
 const loadInvoice = async (req, id) => {
@@ -73,7 +125,11 @@ const loadInvoice = async (req, id) => {
 export const listInvoices = asyncHandler(async (req, res) => {
   const { page, limit, skip } = parsePagination(req.query);
   const filter = tenantFilter(req.user, req.branchId);
-  if (req.query.status) filter.paymentStatus = req.query.status;
+  if (req.query.status === 'due' || req.query.status === 'outstanding') {
+    filter.paymentStatus = { $in: ['unpaid', 'partially_paid'] };
+  } else if (req.query.status) {
+    filter.paymentStatus = req.query.status;
+  }
   if (req.query.patientId) filter.patientId = req.query.patientId;
   if (req.query.doctorId) filter.doctorId = req.query.doctorId;
   if (req.user.role === 'doctor' && !hasPermission(req.user, P.REVENUE_ALL)) {
@@ -93,12 +149,46 @@ export const listInvoices = asyncHandler(async (req, res) => {
     }
   }
 
-  const [rows, total] = await Promise.all([
+  const [rows, total, outstandingAgg, collections] = await Promise.all([
     Invoice.find(filter).sort({ invoiceDate: -1 }).skip(skip).limit(limit).populate(POPULATE),
     Invoice.countDocuments(filter),
+    Invoice.aggregate([
+      {
+        $match: {
+          ...tenantFilter(req.user, req.branchId),
+          paymentStatus: { $in: ['unpaid', 'partially_paid'] },
+          ...(req.user.role === 'doctor' && !hasPermission(req.user, P.REVENUE_ALL)
+            ? { doctorId: req.user._id }
+            : {}),
+        },
+      },
+      { $group: { _id: null, due: { $sum: '$dueAmount' }, count: { $sum: 1 } } },
+    ]),
+    collectionsByMethod(
+      {
+        ...tenantFilter(req.user, req.branchId),
+      },
+      req.query.collectFrom ||
+        (() => {
+          const d = new Date();
+          d.setHours(0, 0, 0, 0);
+          return d;
+        })(),
+      req.query.collectTo || new Date()
+    ),
   ]);
 
-  res.json({ success: true, ...paginated({ items: rows, total, page, limit }), invoices: rows });
+  res.json({
+    success: true,
+    ...paginated({ items: rows, total, page, limit }),
+    invoices: rows,
+    collections: {
+      ...collections,
+      outstanding: roundMoney(outstandingAgg[0]?.due || 0),
+      outstandingCount: outstandingAgg[0]?.count || 0,
+      label: req.query.collectFrom || req.query.collectTo ? 'Selected period' : 'Today',
+    },
+  });
 });
 
 export const getInvoice = asyncHandler(async (req, res) => {
@@ -114,14 +204,18 @@ export const createInvoice = asyncHandler(async (req, res) => {
   if (!patientId) {
     return res.status(400).json({ success: false, message: 'patientId is required.' });
   }
+  const namedItems = (Array.isArray(items) ? items : []).filter((i) => String(i?.name || '').trim());
+  if (!namedItems.length) {
+    return res.status(400).json({ success: false, message: 'Add at least one invoice line item.' });
+  }
   const patient = await Patient.findById(patientId);
-  if (!patient) return res.status(404).json({ success: false, message: 'Patient not found.' });
+  if (!patient || !patient.isActive) return res.status(404).json({ success: false, message: 'Patient not found.' });
   assertSameClinic(req.user, patient.clinicId);
   assertBranchAccess(req.user, patient.branchId);
 
   const clinic = await Clinic.findById(patient.clinicId);
   const rate = taxRate != null ? Number(taxRate) : clinic?.taxEnabled ? clinic.taxRate || 0 : 0;
-  const totals = computeInvoiceTotals({ items, discount, taxRate: rate });
+  const totals = computeInvoiceTotals({ items: namedItems, discount, taxRate: rate });
   const branchId = await resolveWriteBranchId(req.user, patient.branchId || req.branchId);
   const invoiceNumber = await nextInvoiceNumber(patient.clinicId);
 
@@ -222,13 +316,13 @@ export const recordPayment = asyncHandler(async (req, res) => {
 
   await refreshInvoicePayment(invoice);
 
+  // Inventory UI was removed; never block payment collection on stock.
+  // Legacy medicine lines still attempt soft deduction, but failures are ignored.
   if (invoice.inventoryDeducted !== true && ['paid', 'partially_paid'].includes(invoice.paymentStatus)) {
     try {
       await deductInvoiceStock(invoice, req.user._id);
-    } catch (err) {
-      await Payment.deleteOne({ _id: payment._id });
-      await refreshInvoicePayment(invoice);
-      return res.status(err.status || 400).json({ success: false, message: err.message });
+    } catch {
+      /* stock optional — payment already recorded */
     }
   }
 
@@ -317,39 +411,38 @@ export const revenueSummary = asyncHandler(async (req, res) => {
   }
 
   const match = tenantFilter(req.user, req.branchId);
+  // Payment docs don't store doctorId — doctor-scoped revenue uses invoice filter via lookup if needed.
+  // Doctors have REVENUE_ALL by default; keep match clinic/branch only for Payment aggregates.
+
+  const from = req.query.from || null;
+  const to = req.query.to || null;
+  const collections = await collectionsByMethod(match, from, to);
+
+  const invoiceMatch = {
+    ...tenantFilter(req.user, req.branchId),
+    paymentStatus: { $ne: 'cancelled' },
+  };
   if (req.user.role === 'doctor' && !hasPermission(req.user, P.REVENUE_ALL)) {
-    match.doctorId = req.user._id;
-  }
-  if (req.query.from || req.query.to) {
-    match.paymentDate = {};
-    if (req.query.from) match.paymentDate.$gte = new Date(req.query.from);
-    if (req.query.to) {
-      const to = new Date(req.query.to);
-      to.setHours(23, 59, 59, 999);
-      match.paymentDate.$lte = to;
-    }
+    invoiceMatch.doctorId = req.user._id;
   }
 
-  const completedMatch = { ...match, status: 'completed' };
-  const [byMethod, totals, outstanding, byDoctor, byBranch] = await Promise.all([
-    Payment.aggregate([
-      { $match: completedMatch },
-      { $group: { _id: '$paymentMethod', amount: { $sum: '$amount' }, count: { $sum: 1 } } },
-    ]),
-    Payment.aggregate([
-      { $match: completedMatch },
-      { $group: { _id: null, collected: { $sum: '$amount' }, count: { $sum: 1 } } },
-    ]),
+  const [outstanding, byDoctor, byBranch] = await Promise.all([
     Invoice.aggregate([
-      { $match: { ...tenantFilter(req.user, req.branchId), paymentStatus: { $in: ['unpaid', 'partially_paid'] } } },
+      {
+        $match: {
+          ...tenantFilter(req.user, req.branchId),
+          paymentStatus: { $in: ['unpaid', 'partially_paid'] },
+          ...(invoiceMatch.doctorId ? { doctorId: invoiceMatch.doctorId } : {}),
+        },
+      },
       { $group: { _id: null, due: { $sum: '$dueAmount' }, count: { $sum: 1 } } },
     ]),
     Invoice.aggregate([
-      { $match: { ...tenantFilter(req.user, req.branchId), paymentStatus: { $ne: 'cancelled' } } },
+      { $match: invoiceMatch },
       { $group: { _id: '$doctorId', billed: { $sum: '$total' }, paid: { $sum: '$paidAmount' } } },
     ]),
     Invoice.aggregate([
-      { $match: { ...tenantFilter(req.user, req.branchId), paymentStatus: { $ne: 'cancelled' } } },
+      { $match: invoiceMatch },
       { $group: { _id: '$branchId', billed: { $sum: '$total' }, paid: { $sum: '$paidAmount' } } },
     ]),
   ]);
@@ -364,12 +457,17 @@ export const revenueSummary = asyncHandler(async (req, res) => {
   res.json({
     success: true,
     summary: {
-      collected: roundMoney(totals[0]?.collected || 0),
-      paymentCount: totals[0]?.count || 0,
+      collected: collections.collected,
+      paymentCount: collections.paymentCount,
       outstanding: roundMoney(outstanding[0]?.due || 0),
       outstandingCount: outstanding[0]?.count || 0,
-      byMethod,
-      byDoctor: byDoctor.map((d) => ({ ...d, doctorName: doctorMap[String(d._id)] || 'Unassigned' })),
+      byMethod: collections.byMethod,
+      byDoctor: byDoctor.map((d) => ({
+        ...d,
+        billed: roundMoney(d.billed),
+        paid: roundMoney(d.paid),
+        doctorName: doctorMap[String(d._id)] || 'Unassigned',
+      })),
       byBranch: byBranch.map((b) => ({
         ...b,
         billed: roundMoney(b.billed),
@@ -382,7 +480,7 @@ export const revenueSummary = asyncHandler(async (req, res) => {
 
 export const patientBilling = asyncHandler(async (req, res) => {
   const patient = await Patient.findById(req.params.patientId);
-  if (!patient) return res.status(404).json({ success: false, message: 'Patient not found.' });
+  if (!patient || !patient.isActive) return res.status(404).json({ success: false, message: 'Patient not found.' });
   assertSameClinic(req.user, patient.clinicId);
   assertBranchAccess(req.user, patient.branchId);
   const filter = { clinicId: patient.clinicId, patientId: patient._id };

@@ -22,6 +22,7 @@ export const listMyNotifications = async (req, res) => {
     }
 
     if (req.query.status) filter.status = req.query.status;
+    if (req.query.type) filter.notificationType = req.query.type;
 
     const { page, limit, skip } = parsePagination(req.query, { page: 1, limit: 20, max: 100 });
     const [notifications, total] = await Promise.all([
@@ -55,7 +56,10 @@ export const runReminderPass = async (req, res) => {
     if (!['doctor'].includes(req.user.role)) {
       return res.status(403).json({ success: false, message: 'Not authorized.' });
     }
-    const processed = await processDueReminders();
+    if (!req.user.clinicId) {
+      return res.status(400).json({ success: false, message: 'Clinic context required.' });
+    }
+    const processed = await processDueReminders({ clinicId: req.user.clinicId });
     res.json({ success: true, processed });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -69,6 +73,26 @@ export const listDoctorInbox = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Doctors only.' });
     }
     const filter = { doctorId: req.user._id };
+    if (req.query.unread === '1' || req.query.filter === 'unread') {
+      filter.readAt = null;
+    }
+    const bucket = String(req.query.filter || '').toLowerCase();
+    if (bucket === 'appointment') {
+      filter.type = {
+        $in: [
+          'appointment_scheduled',
+          'appointment_rescheduled',
+          'appointment_cancelled',
+          'appointment_completed',
+          'appointment_no_show',
+          'upcoming_appointment',
+        ],
+      };
+    } else if (bucket === 'patient') {
+      filter.type = 'patient_added';
+    } else if (bucket === 'reminder') {
+      filter.type = { $in: ['reminder_sent', 'reminder_failed'] };
+    }
     const { page, limit, skip } = parsePagination(req.query, { page: 1, limit: 20, max: 100 });
     const [notifications, total, unreadCount] = await Promise.all([
       DoctorNotification.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
@@ -102,8 +126,12 @@ export const markInboxRead = async (req, res) => {
       note.readAt = new Date();
       await note.save();
     }
-    res.json({ success: true, notification: note });
+    const unreadCount = await getUnreadCount(req.user._id);
+    res.json({ success: true, notification: note, unreadCount });
   } catch (error) {
+    if (error?.name === 'CastError') {
+      return res.status(404).json({ success: false, message: 'Notification not found.' });
+    }
     res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -117,7 +145,7 @@ export const markAllInboxRead = async (req, res) => {
       { doctorId: req.user._id, readAt: null },
       { $set: { readAt: new Date() } }
     );
-    res.json({ success: true, modified: result.modifiedCount });
+    res.json({ success: true, modified: result.modifiedCount, unreadCount: 0 });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

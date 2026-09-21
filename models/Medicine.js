@@ -28,7 +28,7 @@ const medicineSchema = new mongoose.Schema(
     manufacturer: { type: String, default: '', trim: true },
     sellingPrice: { type: Number, default: 0, min: 0 },
     purchasePrice: { type: Number, default: 0, min: 0 },
-    minimumStockLevel: { type: Number, default: 10, min: 0 },
+    minimumStockLevel: { type: Number, default: 0, min: 0 },
     hsnCode: { type: String, default: '', trim: true },
     taxRate: { type: Number, default: 0, min: 0 },
     defaultDosage: { type: String, default: '', trim: true },

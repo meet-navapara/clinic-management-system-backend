@@ -1,6 +1,7 @@
 import User from '../models/User.js';
 import Patient from '../models/Patient.js';
 import Appointment from '../models/Appointment.js';
+import Clinic from '../models/Clinic.js';
 import { toAuthUser } from '../utils/authUser.js';
 import { isSameClinic } from '../middleware/auth.js';
 import { notifyDoctor } from '../utils/doctorNotify.js';
@@ -314,6 +315,108 @@ export const getClinicOverviewAppointments = async (req, res) => {
         ...a.toObject(),
         status: normalizeStatus(a.status),
       })),
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/** Super Admin: clinics waiting for MSG91 campaign template approval */
+export const listCampaignWhatsAppTemplates = async (req, res) => {
+  try {
+    const status = req.query.status || 'pending';
+    const filter =
+      status === 'all'
+        ? { 'whatsappCampaignTemplate.status': { $in: ['pending', 'approved', 'rejected'] } }
+        : { 'whatsappCampaignTemplate.status': status };
+
+    const clinics = await Clinic.find(filter)
+      .select('name slug phone email whatsappCampaignTemplate updatedAt')
+      .populate('whatsappCampaignTemplate.submittedBy', 'name email')
+      .populate('whatsappCampaignTemplate.reviewedBy', 'name email')
+      .sort({ 'whatsappCampaignTemplate.submittedAt': -1 })
+      .limit(100);
+
+    res.json({
+      success: true,
+      clinics: clinics.map((c) => ({
+        _id: c._id,
+        name: c.name,
+        slug: c.slug,
+        phone: c.phone,
+        email: c.email,
+        template: c.whatsappCampaignTemplate,
+      })),
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * Super Admin approves after creating the template on MSG91 and Meta shows Approved.
+ * Body: { action: 'approve'|'reject', approvedName?, approvedBodyVars?, reviewNote? }
+ */
+export const reviewCampaignWhatsAppTemplate = async (req, res) => {
+  try {
+    const clinic = await Clinic.findById(req.params.clinicId);
+    if (!clinic) return res.status(404).json({ success: false, message: 'Clinic not found.' });
+
+    const tpl = clinic.whatsappCampaignTemplate;
+    if (!tpl || tpl.status !== 'pending') {
+      return res.status(400).json({
+        success: false,
+        message: 'This clinic has no pending campaign WhatsApp template.',
+      });
+    }
+
+    const action = String(req.body.action || '').toLowerCase();
+    if (action === 'reject') {
+      clinic.whatsappCampaignTemplate.status = 'rejected';
+      clinic.whatsappCampaignTemplate.reviewNote = String(req.body.reviewNote || 'Rejected').slice(0, 500);
+      clinic.whatsappCampaignTemplate.reviewedAt = new Date();
+      clinic.whatsappCampaignTemplate.reviewedBy = req.user._id;
+      clinic.whatsappCampaignTemplate.approvedName = '';
+      clinic.whatsappCampaignTemplate.approvedBodyVars = '';
+      await clinic.save();
+      return res.json({
+        success: true,
+        message: 'Template rejected. Doctor can submit again.',
+        template: clinic.whatsappCampaignTemplate,
+      });
+    }
+
+    if (action !== 'approve') {
+      return res.status(422).json({ success: false, message: 'action must be approve or reject.' });
+    }
+
+    const approvedName = String(req.body.approvedName || tpl.requestedName || '')
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, '_');
+    const approvedBodyVars = String(
+      req.body.approvedBodyVars || tpl.requestedBodyVars || 'patientName,clinicName,_message'
+    ).trim();
+
+    if (!approvedName) {
+      return res.status(422).json({
+        success: false,
+        message: 'Enter the exact MSG91 template name that Meta approved.',
+      });
+    }
+
+    clinic.whatsappCampaignTemplate.status = 'approved';
+    clinic.whatsappCampaignTemplate.approvedName = approvedName;
+    clinic.whatsappCampaignTemplate.approvedBodyVars = approvedBodyVars;
+    clinic.whatsappCampaignTemplate.reviewNote = String(req.body.reviewNote || 'Approved on MSG91').slice(0, 500);
+    clinic.whatsappCampaignTemplate.reviewedAt = new Date();
+    clinic.whatsappCampaignTemplate.reviewedBy = req.user._id;
+    await clinic.save();
+
+    res.json({
+      success: true,
+      message: `Approved. Clinic can now send WhatsApp campaigns with template “${approvedName}”.`,
+      template: clinic.whatsappCampaignTemplate,
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

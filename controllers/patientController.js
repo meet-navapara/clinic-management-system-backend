@@ -294,6 +294,7 @@ export const createPatient = async (req, res) => {
       body: `${patient.name} · ${patient.patientCode}`,
       link: `/doctor/patients/${patient._id}`,
       metadata: { patientId: patient._id },
+      actorId: req.user._id,
     });
 
     res.status(201).json({ success: true, message: 'Patient added.', patient });

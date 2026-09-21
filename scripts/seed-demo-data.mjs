@@ -882,7 +882,7 @@ async function main() {
       branchId: westBranch._id,
       name: 'DEMO: Panchakarma camp (scheduled)',
       message: 'Panchakarma screening at Andheri West next Saturday. Limited tokens.',
-      channel: 'sms',
+      channel: 'whatsapp',
       audienceType: 'tags',
       audienceFilter: { tags: ['panchakarma'] },
       scheduledAt: day(5),

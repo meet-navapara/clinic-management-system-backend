@@ -29,6 +29,33 @@ const localDateKey = (d = new Date()) => {
   return `${y}-${m}-${day}`;
 };
 
+const walkInTimeSlot = (d = new Date()) => {
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
+};
+
+/** Create a confirmed walk-in appointment and attach it to the ticket when missing. */
+const createWalkInAppointment = async ({ clinicId, branchId, patientId, doctorId }) => {
+  if (!doctorId) {
+    const err = new Error('Assign a doctor before starting consultation for a walk-in.');
+    err.status = 400;
+    throw err;
+  }
+  return Appointment.create({
+    clinicId,
+    branchId: branchId || null,
+    patientId,
+    doctor: doctorId,
+    appointmentDate: startOfDay(),
+    timeSlot: walkInTimeSlot(),
+    reason: 'Walk-in',
+    appointmentType: 'Walk-in',
+    status: 'confirmed',
+    notes: 'Auto-created from queue check-in',
+  });
+};
+
 /** Valid queue status transitions. */
 const STATUS_TRANSITIONS = {
   waiting: ['called', 'in_consultation', 'cancelled', 'no_show'],
@@ -121,7 +148,7 @@ export const checkIn = asyncHandler(async (req, res) => {
     return res.status(400).json({ success: false, message: 'Select a branch to check in patients.' });
   }
   const patient = await Patient.findById(patientId);
-  if (!patient) return res.status(404).json({ success: false, message: 'Patient not found.' });
+  if (!patient || !patient.isActive) return res.status(404).json({ success: false, message: 'Patient not found.' });
   assertSameClinic(req.user, patient.clinicId);
   assertBranchAccess(req.user, patient.branchId);
   if (patient.branchId && String(patient.branchId) !== String(req.branchId)) {
@@ -165,6 +192,16 @@ export const checkIn = asyncHandler(async (req, res) => {
 
   if (req.user.role === 'doctor' && !resolvedDoctorId) {
     resolvedDoctorId = req.user._id;
+  }
+
+  if (!resolvedAppointmentId && resolvedDoctorId) {
+    const walkIn = await createWalkInAppointment({
+      clinicId: patient.clinicId,
+      branchId: req.branchId,
+      patientId: patient._id,
+      doctorId: resolvedDoctorId,
+    });
+    resolvedAppointmentId = walkIn._id;
   }
 
   const branch = await Branch.findById(req.branchId);
@@ -261,6 +298,42 @@ export const updateTicketStatus = asyncHandler(async (req, res) => {
 
   await ticket.populate(POPULATE);
   res.json({ success: true, ticket });
+});
+
+export const ensureTicketAppointment = asyncHandler(async (req, res) => {
+  const ticket = await QueueTicket.findById(req.params.id);
+  if (!ticket) return res.status(404).json({ success: false, message: 'Ticket not found.' });
+  assertSameClinic(req.user, ticket.clinicId);
+  assertBranchAccess(req.user, ticket.branchId);
+
+  if (ticket.appointmentId) {
+    return res.json({
+      success: true,
+      appointmentId: ticket.appointmentId,
+      ticket,
+    });
+  }
+
+  let doctorId = ticket.doctorId;
+  if (!doctorId && req.user.role === 'doctor') {
+    doctorId = req.user._id;
+    ticket.doctorId = doctorId;
+  }
+  if (!doctorId && req.body.doctorId) {
+    doctorId = req.body.doctorId;
+    ticket.doctorId = doctorId;
+  }
+
+  const walkIn = await createWalkInAppointment({
+    clinicId: ticket.clinicId,
+    branchId: ticket.branchId,
+    patientId: ticket.patientId,
+    doctorId,
+  });
+  ticket.appointmentId = walkIn._id;
+  await ticket.save();
+  await ticket.populate(POPULATE);
+  res.json({ success: true, appointmentId: walkIn._id, ticket });
 });
 
 export const callNext = asyncHandler(async (req, res) => {

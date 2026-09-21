@@ -22,7 +22,8 @@ const paymentSchema = new mongoose.Schema(
 );
 
 paymentSchema.index({ clinicId: 1, paymentDate: -1 });
-paymentSchema.index({ clinicId: 1, doctorId: 1 });
+paymentSchema.index({ clinicId: 1, branchId: 1, paymentDate: -1 });
+paymentSchema.index({ clinicId: 1, paymentMethod: 1, paymentDate: -1 });
 
 const Payment = mongoose.model('Payment', paymentSchema);
 export default Payment;

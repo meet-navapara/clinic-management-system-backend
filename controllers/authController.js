@@ -16,7 +16,8 @@ import {
 import { provisionClinicForDoctor } from '../utils/clinicProvisioning.js';
 import Branch from '../models/Branch.js';
 import { writeAudit, AUDIT } from '../utils/audit.js';
-import { normalizeEmail, phoneMatchVariants } from '../utils/normalizeContact.js';
+import { normalizeEmail, phoneMatchVariants, normalizeIndianMobile } from '../utils/normalizeContact.js';
+import { uploadImageBuffer, isCloudinaryConfigured } from '../utils/cloudinary.js';
 
 const EMAIL_TAKEN = 'Email already registered.';
 const PHONE_TAKEN = 'Mobile number already registered.';
@@ -448,67 +449,159 @@ export const getMe = async (req, res) => {
   res.json({ success: true, user: toAuthUser(req.user) });
 };
 
+const MAX_PHOTO_DATA_URL = 500000;
+
+const BASE_PROFILE_FIELDS = ['name', 'firstName', 'lastName', 'phone'];
+const DOCTOR_PROFILE_FIELDS = [
+  'specialization',
+  'qualification',
+  'experience',
+  'licenseNumber',
+  'consultationFee',
+  'consultationTypes',
+  'bio',
+  'clinicName',
+  'clinicAddress',
+  'city',
+  'state',
+  'country',
+  'postalCode',
+  'availableDays',
+  'availableSlots',
+  'practiceSettings',
+];
+
+const parseJsonField = (value) => {
+  if (Array.isArray(value) || (value && typeof value === 'object')) return value;
+  if (typeof value !== 'string') return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+};
+
+const passwordComplexityOk = (password) => {
+  const value = String(password || '');
+  return (
+    value.length >= 8 &&
+    /[A-Z]/.test(value) &&
+    /[a-z]/.test(value) &&
+    /\d/.test(value) &&
+    /[^A-Za-z0-9]/.test(value)
+  );
+};
+
 export const updateProfile = async (req, res) => {
   try {
-    const allowedFields = [
-      'name',
-      'firstName',
-      'lastName',
-      'phone',
-      'specialization',
-      'qualification',
-      'experience',
-      'licenseNumber',
-      'consultationFee',
-      'consultationTypes',
-      'bio',
-      'clinicName',
-      'clinicAddress',
-      'city',
-      'state',
-      'country',
-      'postalCode',
-      'availableDays',
-      'availableSlots',
-      'practiceSettings',
-    ];
+    const isDoctor = req.user.role === 'doctor';
+    const allowedFields = isDoctor
+      ? [...BASE_PROFILE_FIELDS, ...DOCTOR_PROFILE_FIELDS]
+      : BASE_PROFILE_FIELDS;
 
     const updates = {};
     for (const field of allowedFields) {
-      if (req.body[field] === undefined || req.body[field] === '') continue;
+      if (req.body[field] === undefined) continue;
 
       let value = req.body[field];
 
       if (field === 'availableDays' || field === 'availableSlots' || field === 'consultationTypes') {
-        if (Array.isArray(value)) {
-          updates[field] = value;
-          continue;
+        const parsed = parseJsonField(value);
+        if (!parsed) continue;
+        if (field === 'availableDays' && Array.isArray(parsed) && parsed.length < 1) {
+          return res.status(422).json({
+            success: false,
+            message: 'Select at least one available day.',
+          });
         }
-        try {
-          value = JSON.parse(value);
-        } catch {
-          continue;
-        }
-      } else if (field === 'practiceSettings') {
-        if (typeof value === 'string') {
-          try {
-            value = JSON.parse(value);
-          } catch {
-            continue;
-          }
-        }
-        updates[field] = value;
+        updates[field] = parsed;
         continue;
-      } else if (field === 'experience' || field === 'consultationFee') {
-        value = Number(value);
       }
 
-      updates[field] = value;
+      if (field === 'practiceSettings') {
+        const parsed = parseJsonField(value);
+        if (!parsed || typeof parsed !== 'object') continue;
+        const existing = req.user.practiceSettings?.toObject?.() || req.user.practiceSettings || {};
+        updates.practiceSettings = {
+          ...existing,
+          ...parsed,
+          defaultDurationMinutes: Math.max(
+            5,
+            Math.min(240, Number(parsed.defaultDurationMinutes) || existing.defaultDurationMinutes || 30)
+          ),
+          reminderHoursBefore: Array.isArray(parsed.reminderHoursBefore)
+            ? parsed.reminderHoursBefore.filter((n) => Number(n) > 0)
+            : existing.reminderHoursBefore || [24, 2],
+          appointmentTypes: Array.isArray(parsed.appointmentTypes)
+            ? parsed.appointmentTypes.filter(Boolean)
+            : existing.appointmentTypes || ['Consultation', 'Follow-up', 'Procedure'],
+          dayStart: parsed.dayStart || existing.dayStart || '09:00',
+          dayEnd: parsed.dayEnd || existing.dayEnd || '18:00',
+          breakStart: parsed.breakStart || existing.breakStart || '13:00',
+          breakEnd: parsed.breakEnd || existing.breakEnd || '14:00',
+          sendConfirmationReminder:
+            parsed.sendConfirmationReminder !== undefined
+              ? Boolean(parsed.sendConfirmationReminder)
+              : existing.sendConfirmationReminder !== false,
+        };
+        continue;
+      }
+
+      if (field === 'phone') {
+        const phone = normalizeIndianMobile(value);
+        if (!phone) {
+          return res.status(422).json({
+            success: false,
+            message: 'Mobile number must be a valid 10-digit Indian number.',
+          });
+        }
+        const owner = await findUserByPhone(phone);
+        if (owner && String(owner._id) !== String(req.user._id)) {
+          return res.status(409).json({
+            success: false,
+            message: PHONE_TAKEN,
+            errors: { phone: PHONE_TAKEN },
+          });
+        }
+        updates.phone = phone;
+        continue;
+      }
+
+      if (field === 'experience' || field === 'consultationFee') {
+        value = Number(value);
+        if (Number.isNaN(value) || value < 0) value = 0;
+      }
+
+      if (field === 'name' && !String(value || '').trim()) {
+        return res.status(422).json({ success: false, message: 'Name is required.' });
+      }
+
+      updates[field] = typeof value === 'string' ? value.trim() : value;
     }
 
     if (req.file) {
       removeLegacyProfilePhotoFile(req.user.profilePhoto);
-      updates.profilePhoto = bufferToDataUrl(req.file);
+      if (isCloudinaryConfigured()) {
+        const result = await uploadImageBuffer(req.file.buffer, {
+          folder: `clinic-management/${req.user.clinicId || req.user._id}/profile`,
+          publicId: `user-${req.user._id}`,
+        });
+        updates.profilePhoto = result.secure_url;
+      } else {
+        const dataUrl = bufferToDataUrl(req.file);
+        if (dataUrl.length > MAX_PHOTO_DATA_URL) {
+          return res.status(400).json({
+            success: false,
+            message:
+              'Photo is too large for local storage. Add CLOUDINARY_* to the server env or use a smaller image.',
+          });
+        }
+        updates.profilePhoto = dataUrl;
+      }
+    }
+
+    if (req.body.clearPhoto === '1' || req.body.clearPhoto === true) {
+      updates.profilePhoto = '';
     }
 
     const user = await User.findByIdAndUpdate(req.user._id, updates, {
@@ -517,6 +610,47 @@ export const updateProfile = async (req, res) => {
     }).select('-password');
 
     res.json({ success: true, message: 'Profile updated.', user: toAuthUser(user) });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const changePassword = async (req, res) => {
+  try {
+    const currentPassword = String(req.body.currentPassword || '');
+    const newPassword = String(req.body.newPassword || '');
+    if (!currentPassword || !newPassword) {
+      return res.status(422).json({
+        success: false,
+        message: 'Current and new password are required.',
+      });
+    }
+    if (!passwordComplexityOk(newPassword)) {
+      return res.status(422).json({
+        success: false,
+        message:
+          'New password must be at least 8 characters and include upper, lower, digit, and special character.',
+      });
+    }
+    if (currentPassword === newPassword) {
+      return res.status(422).json({
+        success: false,
+        message: 'New password must be different from the current password.',
+      });
+    }
+
+    const user = await User.findById(req.user._id).select('+password');
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found.' });
+    }
+    const matches = await user.comparePassword(currentPassword);
+    if (!matches) {
+      return res.status(400).json({ success: false, message: 'Current password is incorrect.' });
+    }
+
+    user.password = newPassword;
+    await user.save();
+    res.json({ success: true, message: 'Password updated.' });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

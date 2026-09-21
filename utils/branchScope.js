@@ -118,12 +118,8 @@ export const assertSameClinic = (user, resourceClinicId) => {
  * Doctor: missing branchId is allowed for legacy clinic-wide rows.
  */
 export const assertBranchAccess = (user, resourceBranchId) => {
-  if (!resourceBranchId) {
-    if (isStaffAccount(user)) {
-      throw scopeError(403, 'You do not have access to this branch.');
-    }
-    return;
-  }
+  // Legacy rows with no branchId: doctors OK; staff may proceed (scoped by clinic elsewhere).
+  if (!resourceBranchId) return;
   if (!canAccessBranch(user, resourceBranchId)) {
     throw scopeError(403, 'You do not have access to this branch.');
   }

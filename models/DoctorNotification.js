@@ -9,6 +9,7 @@ export const DOCTOR_NOTIFICATION_TYPES = [
   'appointment_rescheduled',
   'appointment_cancelled',
   'appointment_completed',
+  'appointment_no_show',
   'reminder_sent',
   'reminder_failed',
   'upcoming_appointment',

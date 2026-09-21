@@ -162,7 +162,7 @@ export const createStaff = asyncHandler(async (req, res) => {
     staffStatus: 'active',
     isActive: true,
     loginEnabled: enableLogin,
-    // Doctors created via staff must be approved by Super Admin before dashboard access.
+    // Doctors created via Staff stay pending until a clinic doctor approves them.
     approvalStatus: isDoctor ? 'pending' : 'approved',
   });
 
@@ -185,6 +185,9 @@ export const updateStaff = asyncHandler(async (req, res) => {
   assertSameClinic(req.user, user.clinicId);
   if (user.role === 'super_admin') {
     return res.status(403).json({ success: false, message: 'Cannot modify this account.' });
+  }
+  if (String(user._id) === String(req.user._id) && req.body.staffStatus && req.body.staffStatus !== 'active') {
+    return res.status(400).json({ success: false, message: 'You cannot disable your own account.' });
   }
 
   const fields = ['name', 'phone', 'customRoleName', 'joiningDate', 'specialization', 'qualification', 'consultationFee'];
@@ -226,7 +229,7 @@ export const updateStaff = asyncHandler(async (req, res) => {
     user.role = 'doctor';
     user.staffType = '';
     user.loginEnabled = true;
-    // Promoting staff → doctor requires Super Admin approval (do not auto-approve).
+    // Promoting staff → doctor requires clinic-doctor approval before dashboard access.
     if (!wasDoctor) {
       user.approvalStatus = 'pending';
       user.isActive = true;
@@ -245,11 +248,8 @@ export const updateStaff = asyncHandler(async (req, res) => {
 
   if (req.body.loginEnabled !== undefined && user.role !== 'doctor' && user.role !== 'super_admin') {
     const nextLogin = Boolean(req.body.loginEnabled);
-    if (nextLogin && !req.body.password && !user.password) {
-      return res.status(400).json({ success: false, message: 'Set a password to enable login.' });
-    }
-    if (nextLogin && req.body.password === undefined && user.loginEnabled !== true) {
-      // Enabling login on an existing record: require a new password so the Doctor's password is never reused.
+    const enablingLogin = nextLogin && user.loginEnabled !== true;
+    if (enablingLogin && !req.body.password) {
       return res.status(400).json({
         success: false,
         message: 'Set a unique password when enabling staff login.',
@@ -275,6 +275,7 @@ export const updateStaff = asyncHandler(async (req, res) => {
     user.staffStatus = req.body.staffStatus;
     user.isActive = req.body.staffStatus === 'active';
     if (user.role === 'doctor') {
+      // Clinic doctor (admin) may approve additional doctors they added.
       user.approvalStatus = req.body.staffStatus === 'active' ? 'approved' : 'suspended';
     }
     if (req.body.staffStatus !== 'active') {
@@ -285,6 +286,15 @@ export const updateStaff = asyncHandler(async (req, res) => {
         entityType: 'User',
         entityId: user._id,
         detail: `${user.name} → ${req.body.staffStatus}`,
+      });
+    } else if (user.role === 'doctor') {
+      await writeAudit({
+        clinicId: user.clinicId,
+        actorId: req.user._id,
+        action: AUDIT.STAFF_PERMISSIONS,
+        entityType: 'User',
+        entityId: user._id,
+        detail: `${user.name} doctor approved`,
       });
     }
   }

@@ -14,12 +14,16 @@ import {
   retryFailed,
   duplicateCampaign,
   getIntegrationsStatus,
+  getCampaignWhatsAppTemplate,
+  submitCampaignWhatsAppTemplate,
 } from '../controllers/campaignController.js';
 import { campaignSendLimiter } from '../middleware/rateLimit.js';
 
 const router = Router();
 
 router.get('/integrations/status', protect, requireClinicUser, requirePermission(P.CAMPAIGNS_MANAGE), getIntegrationsStatus);
+router.get('/whatsapp-template', protect, requireClinicUser, requirePermission(P.CAMPAIGNS_MANAGE), getCampaignWhatsAppTemplate);
+router.post('/whatsapp-template', protect, requireClinicUser, requirePermission(P.CAMPAIGNS_MANAGE), submitCampaignWhatsAppTemplate);
 
 router.use(protect, requireClinicUser, attachBranchContext);
 

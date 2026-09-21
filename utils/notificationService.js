@@ -90,10 +90,9 @@ async function createReminderIfMissing({
 
   const appointmentAt = combineDateAndSlot(appointment.appointmentDate, appointment.timeSlot);
   const dateLabel = appointmentAt.toLocaleDateString('en-IN', {
-    weekday: 'long',
-    year: 'numeric',
-    month: 'long',
     day: 'numeric',
+    month: 'long',
+    year: 'numeric',
   });
 
   const message = formatReminderMessage({
@@ -211,12 +210,15 @@ export const rescheduleAppointmentReminders = async (appointment) => {
  * When MSG91 WhatsApp is configured → real template send.
  * Otherwise → fail clearly (no fake "sent" / mock deep-link).
  */
-export const processDueReminders = async () => {
+export const processDueReminders = async ({ clinicId = null } = {}) => {
   const now = new Date();
-  const due = await NotificationLog.find({
+  const dueFilter = {
     status: { $in: ['scheduled', 'pending'] },
     scheduledAt: { $lte: now },
-  }).limit(50);
+  };
+  if (clinicId) dueFilter.clinicId = clinicId;
+
+  const due = await NotificationLog.find(dueFilter).limit(50);
 
   let processed = 0;
   const whatsappReady = getCommsConfigStatus().whatsapp.configured;
@@ -230,9 +232,12 @@ export const processDueReminders = async () => {
         .populate('clinicId', 'name');
 
       const status = appointment ? normalizeStatus(appointment.status) : null;
-      if (!appointment || status === 'cancelled' || status === 'no_show') {
+      if (!appointment || status === 'cancelled' || status === 'no_show' || status === 'completed') {
         log.status = 'cancelled';
-        log.error = 'Appointment cancelled, missing, or no-show';
+        log.error =
+          status === 'completed'
+            ? 'Appointment already completed'
+            : 'Appointment cancelled, missing, or no-show';
         await log.save();
         continue;
       }
@@ -241,10 +246,9 @@ export const processDueReminders = async () => {
       const phone = log.recipientPhone || patientLike?.phone || '';
       const appointmentAt = combineDateAndSlot(appointment.appointmentDate, appointment.timeSlot);
       const dateLabel = appointmentAt.toLocaleDateString('en-IN', {
-        weekday: 'long',
-        year: 'numeric',
-        month: 'long',
         day: 'numeric',
+        month: 'long',
+        year: 'numeric',
       });
       const doctorName = appointment.doctor?.name || 'Doctor';
       const clinicName = appointment.clinicId?.name || 'the clinic';
@@ -257,6 +261,15 @@ export const processDueReminders = async () => {
         log.channel = 'whatsapp';
         log.provider = 'none';
         await log.save();
+        await notifyDoctor({
+          doctorId: appointment.doctor?._id || appointment.doctor,
+          clinicId: appointment.clinicId?._id || appointment.clinicId,
+          type: 'reminder_failed',
+          title: 'WhatsApp reminder failed',
+          body: 'WhatsApp provider not configured.',
+          link: `/doctor/appointments/${appointment._id}`,
+          metadata: { notificationLogId: log._id, appointmentId: appointment._id },
+        });
         continue;
       }
 
@@ -265,12 +278,23 @@ export const processDueReminders = async () => {
         log.error = 'Patient phone number missing.';
         log.channel = 'whatsapp';
         await log.save();
+        await notifyDoctor({
+          doctorId: appointment.doctor?._id || appointment.doctor,
+          clinicId: appointment.clinicId?._id || appointment.clinicId,
+          type: 'reminder_failed',
+          title: 'WhatsApp reminder failed',
+          body: `${patientName} has no phone number on file.`,
+          link: `/doctor/appointments/${appointment._id}`,
+          metadata: { notificationLogId: log._id, appointmentId: appointment._id },
+        });
         continue;
       }
 
       const result = await sendViaChannel('whatsapp', {
         toPhone: phone,
         bodyText: log.message,
+        templateKind:
+          log.notificationType === 'appointment_reminder' ? 'reminder' : 'confirmation',
         context: {
           patientName,
           clinicName,

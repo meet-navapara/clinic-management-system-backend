@@ -120,12 +120,8 @@ function isMarketingOptedIn(patient, channel, purpose) {
   const prefs = patient.communicationPrefs || {};
   if (prefs.marketingOptOut === true) return false;
   if (channel === 'whatsapp') return prefs.marketingWhatsapp !== false;
-  if (channel === 'sms') {
-    if (patient.sendSms === false) return false;
-    return prefs.marketingSms !== false;
-  }
   if (channel === 'email') return prefs.marketingEmail !== false;
-  return true;
+  return false;
 }
 
 /**

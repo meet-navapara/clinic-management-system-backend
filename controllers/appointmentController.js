@@ -2,7 +2,6 @@ import Appointment from '../models/Appointment.js';
 import User from '../models/User.js';
 import Patient from '../models/Patient.js';
 import NotificationLog from '../models/NotificationLog.js';
-import { buildWhatsAppUrl } from '../utils/whatsapp.js';
 import { isSameClinic } from '../middleware/auth.js';
 import { hasPermission, P } from '../utils/permissions.js';
 import { tenantFilter, assertBranchAccess, resolveWriteBranchId, canAccessBranch } from '../utils/branchScope.js';
@@ -25,6 +24,7 @@ import {
   timeToMinutes,
   isValidHhMm,
 } from '../utils/timeSlots.js';
+import { getCommsConfigStatus, sendViaChannel } from '../utils/comms/providers.js';
 
 const isCastError = (error) => error?.name === 'CastError' || error?.kind === 'ObjectId';
 
@@ -121,7 +121,7 @@ const assertCanManageAppointment = (req, appointment) => {
   if (!isSameClinic(req.user, appointment.clinicId)) return false;
   if (!canAccessBranch(req.user, appointment.branchId)) return false;
   if (req.user.role === 'doctor') return true;
-  return hasPermission(req.user, P.APPOINTMENTS_VIEW) || hasPermission(req.user, P.APPOINTMENTS_MANAGE);
+  return hasPermission(req.user, P.APPOINTMENTS_MANAGE);
 };
 
 export const createAppointment = async (req, res) => {
@@ -268,25 +268,13 @@ export const createAppointment = async (req, res) => {
       body: `${patientRecord.name} · ${timeSlot}`,
       link: `/doctor/appointments/${appointment._id}`,
       metadata: { appointmentId: appointment._id },
+      actorId: req.user._id,
     });
-
-    let whatsappUrl = '';
-    try {
-      whatsappUrl = buildWhatsAppUrl(
-        appointment,
-        appointment.patientId,
-        appointment.doctor,
-        'doctor'
-      );
-    } catch {
-      whatsappUrl = '';
-    }
 
     res.status(201).json({
       success: true,
       message: 'Appointment booked successfully!',
       appointment,
-      whatsappUrl,
     });
   } catch (error) {
     if (error.code === 11000) {
@@ -460,7 +448,7 @@ export const updateAppointmentStatus = async (req, res) => {
     if (notes !== undefined) appointment.notes = notes;
     await appointment.save();
 
-    if (nextStatus === 'cancelled' || nextStatus === 'no_show') {
+    if (nextStatus === 'cancelled' || nextStatus === 'no_show' || nextStatus === 'completed') {
       await cancelAppointmentReminders(appointment._id);
     }
 
@@ -486,15 +474,28 @@ export const updateAppointmentStatus = async (req, res) => {
       });
     }
 
-    if (['cancelled', 'completed'].includes(nextStatus)) {
+    if (['cancelled', 'completed', 'no_show'].includes(nextStatus)) {
+      const type =
+        nextStatus === 'cancelled'
+          ? 'appointment_cancelled'
+          : nextStatus === 'no_show'
+            ? 'appointment_no_show'
+            : 'appointment_completed';
+      let patientName = 'Patient';
+      if (appointment.patientId) {
+        const p = await Patient.findById(appointment.patientId).select('name').lean();
+        if (p?.name) patientName = p.name;
+      }
+      const slot = appointment.timeSlot ? ` · ${appointment.timeSlot}` : '';
       await notifyDoctor({
         doctorId: appointment.doctor,
         clinicId: appointment.clinicId,
-        type: nextStatus === 'cancelled' ? 'appointment_cancelled' : 'appointment_completed',
-        title: `Appointment ${nextStatus}`,
-        body: '',
+        type,
+        title: `Appointment ${nextStatus.replace(/_/g, ' ')}`,
+        body: `${patientName}${slot}`,
         link: `/doctor/appointments/${appointment._id}`,
         metadata: { appointmentId: appointment._id },
+        actorId: req.user._id,
       });
     }
 
@@ -603,6 +604,7 @@ export const rescheduleAppointment = async (req, res) => {
       body: timeSlot,
       link: `/doctor/appointments/${appointment._id}`,
       metadata: { appointmentId: appointment._id },
+      actorId: req.user._id,
     });
 
     await appointment.populate(APPT_POPULATE);
@@ -738,12 +740,13 @@ export const getDoctorDashboardStats = async (req, res) => {
   }
 };
 
-export const getWhatsAppLink = async (req, res) => {
+export const sendAppointmentWhatsApp = async (req, res) => {
   try {
     const appointment = await Appointment.findById(req.params.id)
       .populate('patientId', 'name phone')
       .populate('patient', 'name phone')
-      .populate('doctor', 'name specialization phone');
+      .populate('doctor', 'name specialization phone')
+      .populate('clinicId', 'name');
 
     if (!appointment) {
       return res.status(404).json({ success: false, message: 'Appointment not found.' });
@@ -753,7 +756,7 @@ export const getWhatsAppLink = async (req, res) => {
     if (!patientLike || !appointment.doctor) {
       return res.status(400).json({
         success: false,
-        message: 'Cannot generate WhatsApp link — missing patient or doctor data.',
+        message: 'Cannot send WhatsApp — missing patient or doctor data.',
       });
     }
 
@@ -761,18 +764,93 @@ export const getWhatsAppLink = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Not authorized.' });
     }
 
-    const whatsappUrl = buildWhatsAppUrl(appointment, patientLike, appointment.doctor, 'doctor');
-    if (!whatsappUrl) {
+    const phone = patientLike.phone;
+    if (!phone) {
       return res.status(400).json({
         success: false,
         message: 'Patient has no phone number for WhatsApp.',
       });
     }
-    res.json({ success: true, whatsappUrl });
+
+    if (!getCommsConfigStatus().whatsapp.configured) {
+      return res.status(503).json({
+        success: false,
+        message:
+          'WhatsApp provider not configured. Set MSG91_AUTH_KEY, MSG91_WHATSAPP_NUMBER, and MSG91_WHATSAPP_TEMPLATE_NAME.',
+      });
+    }
+
+    const dateLabel = new Date(appointment.appointmentDate).toLocaleDateString('en-IN', {
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+    });
+    const doctorName = appointment.doctor?.name || 'Doctor';
+    const clinicName = appointment.clinicId?.name || 'the clinic';
+    const patientName = patientLike.name || 'Patient';
+    const timeSlot = appointment.timeSlot || '';
+
+    const result = await sendViaChannel('whatsapp', {
+      toPhone: phone,
+      bodyText: `Appointment reminder for ${patientName} on ${dateLabel} at ${timeSlot}`,
+      templateKind: 'confirmation',
+      context: {
+        patientName,
+        clinicName,
+        doctorName,
+        dateLabel,
+        timeSlot,
+      },
+    });
+
+    await NotificationLog.create({
+      clinicId: appointment.clinicId?._id || appointment.clinicId,
+      appointmentId: appointment._id,
+      patientId: patientLike._id || patientLike.id,
+      recipientPhone: phone,
+      recipientName: patientName,
+      notificationType: 'appointment_confirmation',
+      message: `Manual WhatsApp notify · ${dateLabel} · ${timeSlot}`,
+      channel: 'whatsapp',
+      provider: result.provider || 'msg91',
+      status: 'sent',
+      sentAt: new Date(),
+      scheduledAt: new Date(),
+      metadata: {
+        source: 'manual_notify',
+        providerMessageId: result.providerMessageId || null,
+      },
+    }).catch(() => {});
+
+    if (patientLike._id) {
+      await recordPatientEvent({
+        clinicId: appointment.clinicId?._id || appointment.clinicId,
+        doctorId: appointment.doctor?._id || appointment.doctor,
+        patientId: patientLike._id,
+        type: 'reminder_sent',
+        title: 'WhatsApp notification sent',
+        detail: `Template via MSG91 · ${timeSlot}`,
+        appointmentId: appointment._id,
+      }).catch(() => {});
+    }
+
+    res.json({
+      success: true,
+      sent: true,
+      provider: result.provider || 'msg91',
+      message: 'WhatsApp template sent to the patient.',
+    });
   } catch (error) {
     if (isCastError(error)) {
       return res.status(404).json({ success: false, message: 'Appointment not found.' });
     }
-    res.status(500).json({ success: false, message: error.message });
+    const status = error.status || 500;
+    res.status(status).json({
+      success: false,
+      message: error.message || 'Failed to send WhatsApp.',
+    });
   }
 };
+
+/** @deprecated Prefer POST sendAppointmentWhatsApp — kept for older clients. */
+export const getWhatsAppLink = sendAppointmentWhatsApp;

@@ -32,10 +32,17 @@ export function getCloudinary() {
 
 /**
  * Upload an image buffer to Cloudinary and return the secure HTTPS URL.
+ * @param {{ preserveTransparency?: boolean }} opts — print logos/signatures keep PNG (no auto format).
  */
-export async function uploadImageBuffer(buffer, { folder, publicId, resourceType = 'image' } = {}) {
+export async function uploadImageBuffer(
+  buffer,
+  { folder, publicId, resourceType = 'image', preserveTransparency = false } = {}
+) {
   const client = getCloudinary();
   return new Promise((resolve, reject) => {
+    const transformation = preserveTransparency
+      ? [{ quality: 'auto', format: 'png' }]
+      : [{ quality: 'auto', fetch_format: 'auto' }];
     const stream = client.uploader.upload_stream(
       {
         folder,
@@ -43,7 +50,7 @@ export async function uploadImageBuffer(buffer, { folder, publicId, resourceType
         overwrite: true,
         resource_type: resourceType,
         unique_filename: false,
-        transformation: [{ quality: 'auto', fetch_format: 'auto' }],
+        transformation,
       },
       (error, result) => {
         if (error) {

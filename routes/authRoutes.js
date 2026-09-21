@@ -9,6 +9,7 @@ import {
   logout,
   getMe,
   updateProfile,
+  changePassword,
   forgotPassword,
   resetPassword,
 } from '../controllers/authController.js';
@@ -79,5 +80,6 @@ router.put('/profile', protect, (req, res, next) => {
     next();
   });
 }, updateProfile);
+router.put('/change-password', protect, changePassword);
 
 export default router;

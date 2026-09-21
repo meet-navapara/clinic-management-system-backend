@@ -80,8 +80,12 @@ export const requireClinic = (req, res, next) => {
 /** True if resource belongs to the user's clinic. Super Admin has no clinic bypass. */
 export const isSameClinic = (user, resourceClinicId) => {
   if (!user) return false;
-  if (!resourceClinicId || !user.clinicId) return false;
-  return String(resourceClinicId) === String(user.clinicId);
+  const resourceId =
+    resourceClinicId && typeof resourceClinicId === 'object'
+      ? resourceClinicId._id || resourceClinicId.id
+      : resourceClinicId;
+  if (!resourceId || !user.clinicId) return false;
+  return String(resourceId) === String(user.clinicId);
 };
 
 /** Mongo filter for clinic-scoped queries. */

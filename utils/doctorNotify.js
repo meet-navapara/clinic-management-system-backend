@@ -1,5 +1,9 @@
 import DoctorNotification from '../models/DoctorNotification.js';
 
+/**
+ * Create an in-app inbox notification for a doctor.
+ * Skips when actorId === doctorId so doctors are not notified for their own actions.
+ */
 export async function notifyDoctor({
   doctorId,
   clinicId = null,
@@ -8,8 +12,10 @@ export async function notifyDoctor({
   body = '',
   link = '',
   metadata = {},
+  actorId = null,
 }) {
   if (!doctorId || !type || !title) return null;
+  if (actorId && String(actorId) === String(doctorId)) return null;
   try {
     return await DoctorNotification.create({
       doctorId,

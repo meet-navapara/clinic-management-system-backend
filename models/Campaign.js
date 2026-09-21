@@ -1,6 +1,6 @@
 import mongoose from 'mongoose';
 
-export const CAMPAIGN_CHANNELS = ['whatsapp', 'sms', 'email'];
+export const CAMPAIGN_CHANNELS = ['whatsapp', 'email', 'sms'];
 export const CAMPAIGN_STATUSES = [
   'draft',
   'scheduled',

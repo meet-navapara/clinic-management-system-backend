@@ -7,7 +7,7 @@ import { listTemplates, createTemplate, updateTemplate } from '../controllers/te
 const router = Router();
 router.use(protect, requireClinicUser, attachBranchContext);
 
-router.get('/', requirePermission(P.TEMPLATES_OWN, P.TEMPLATES_CLINIC, P.CONSULTATION, P.PATIENTS_VIEW), listTemplates);
+router.get('/', requirePermission(P.TEMPLATES_OWN, P.TEMPLATES_CLINIC, P.CONSULTATION), listTemplates);
 router.post('/', requirePermission(P.TEMPLATES_OWN, P.TEMPLATES_CLINIC), createTemplate);
 router.patch('/:id', requirePermission(P.TEMPLATES_OWN, P.TEMPLATES_CLINIC), updateTemplate);
 
