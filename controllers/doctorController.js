@@ -1,10 +1,11 @@
 import User from '../models/User.js';
 import Appointment from '../models/Appointment.js';
-import { ACTIVE_APPOINTMENT_STATUSES } from '../models/Appointment.js';
+import { SLOT_BLOCKING_STATUSES } from '../models/Appointment.js';
 import {
   generateTimeSlots,
   windowFromLegacySlots,
   timeToMinutes,
+  filterFutureSlots,
 } from '../utils/timeSlots.js';
 
 const clinicScopedFilter = (req, base = {}) => {
@@ -130,7 +131,7 @@ export const getDoctorAvailability = async (req, res) => {
       const appointments = await Appointment.find({
         doctor: doctor._id,
         appointmentDate: { $gte: startOfDay, $lte: endOfDay },
-        status: { $in: [...ACTIVE_APPOINTMENT_STATUSES] },
+        status: { $in: [...SLOT_BLOCKING_STATUSES] },
       }).select('timeSlot durationMinutes');
 
       bookedSlots = appointments.map((a) => a.timeSlot);
@@ -144,12 +145,15 @@ export const getDoctorAvailability = async (req, res) => {
         .filter(Boolean);
     }
 
-    const availableSlots = allSlots.filter((slot) => {
+    const openSlots = allSlots.filter((slot) => {
       const start = timeToMinutes(slot);
       if (start == null) return false;
       const end = start + durationMinutes;
       return !bookedRanges.some((b) => start < b.end && end > b.start);
     });
+
+    // Never offer times that have already passed (today / past dates).
+    const availableSlots = date ? filterFutureSlots(openSlots, date) : openSlots;
 
     res.json({
       success: true,

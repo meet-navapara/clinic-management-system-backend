@@ -17,12 +17,13 @@ import {
 } from '../utils/appointmentTransitions.js';
 import { recordPatientEvent } from '../utils/patientTimeline.js';
 import { notifyDoctor } from '../utils/doctorNotify.js';
-import { ACTIVE_APPOINTMENT_STATUSES } from '../models/Appointment.js';
+import { ACTIVE_APPOINTMENT_STATUSES, SLOT_BLOCKING_STATUSES } from '../models/Appointment.js';
 import {
   generateTimeSlots,
   windowFromLegacySlots,
   timeToMinutes,
   isValidHhMm,
+  isSlotInPast,
 } from '../utils/timeSlots.js';
 import { getCommsConfigStatus, sendViaChannel } from '../utils/comms/providers.js';
 
@@ -63,6 +64,15 @@ const assertSlotAvailable = async ({
     return { ok: false, status: 400, message: 'Invalid time slot.' };
   }
 
+  const dateKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  if (isSlotInPast(dateKey, timeSlot)) {
+    return {
+      ok: false,
+      status: 400,
+      message: 'That time has already passed. Please choose a later slot.',
+    };
+  }
+
   const duration = Math.max(5, Math.min(240, Number(durationMinutes) || 30));
   const settings = doctor.practiceSettings || {};
   const legacyWindow = windowFromLegacySlots(doctor.availableSlots);
@@ -92,7 +102,7 @@ const assertSlotAvailable = async ({
   const existingFilter = {
     doctor: doctorId,
     appointmentDate: { $gte: startOfDay, $lte: endOfDay },
-    status: { $in: ACTIVE_APPOINTMENT_STATUSES },
+    status: { $in: SLOT_BLOCKING_STATUSES },
   };
   if (excludeId) existingFilter._id = { $ne: excludeId };
 
@@ -628,20 +638,39 @@ export const getDoctorDashboardStats = async (req, res) => {
 
     const doctorId = req.user._id;
     const branchScope = tenantFilter(req.user, req.branchId);
+    const periodRaw = String(req.query.period || 'today').toLowerCase();
+    const period = ['today', 'week', 'month'].includes(periodRaw) ? periodRaw : 'today';
 
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-    const todayEnd = new Date();
-    todayEnd.setHours(23, 59, 59, 999);
+    const now = new Date();
+    const dayStart = new Date(now);
+    dayStart.setHours(0, 0, 0, 0);
+    const dayEnd = new Date(now);
+    dayEnd.setHours(23, 59, 59, 999);
 
-    const weekAgo = new Date();
+    let rangeStart = dayStart;
+    let rangeEnd = dayEnd;
+    if (period === 'week') {
+      // Monday-start week containing today
+      const dow = dayStart.getDay(); // 0 Sun … 6 Sat
+      const offsetToMon = dow === 0 ? -6 : 1 - dow;
+      rangeStart = new Date(dayStart);
+      rangeStart.setDate(dayStart.getDate() + offsetToMon);
+      rangeEnd = new Date(rangeStart);
+      rangeEnd.setDate(rangeStart.getDate() + 6);
+      rangeEnd.setHours(23, 59, 59, 999);
+    } else if (period === 'month') {
+      rangeStart = new Date(dayStart.getFullYear(), dayStart.getMonth(), 1);
+      rangeEnd = new Date(dayStart.getFullYear(), dayStart.getMonth() + 1, 0, 23, 59, 59, 999);
+    }
+
+    const weekAgo = new Date(dayStart);
     weekAgo.setDate(weekAgo.getDate() - 7);
 
-    const [todayAppts, allAppts, totalPatients, newPatients] = await Promise.all([
+    const [periodAppts, allAppts, totalPatients, newPatients] = await Promise.all([
       Appointment.find({
         ...branchScope,
         doctor: doctorId,
-        appointmentDate: { $gte: todayStart, $lte: todayEnd },
+        appointmentDate: { $gte: rangeStart, $lte: rangeEnd },
       }).populate(APPT_POPULATE),
       Appointment.find({ ...branchScope, doctor: doctorId }).select('status patientId appointmentDate'),
       Patient.countDocuments({ ...branchScope, doctorId, isActive: true }),
@@ -659,6 +688,10 @@ export const getDoctorDashboardStats = async (req, res) => {
     }
     const returningPatients = Object.values(patientVisitCounts).filter((c) => c > 1).length;
 
+    const patientsInPeriod = new Set(
+      periodAppts.map((a) => (a.patientId?._id || a.patientId ? String(a.patientId._id || a.patientId) : '')).filter(Boolean)
+    ).size;
+
     const recentPatients = await Patient.find({ ...branchScope, doctorId, isActive: true })
       .sort({ createdAt: -1 })
       .limit(5)
@@ -668,7 +701,7 @@ export const getDoctorDashboardStats = async (req, res) => {
     const QueueTicket = (await import('../models/QueueTicket.js')).default;
     const Prescription = (await import('../models/Prescription.js')).default;
 
-    const tomorrowStart = new Date(todayStart);
+    const tomorrowStart = new Date(dayStart);
     tomorrowStart.setDate(tomorrowStart.getDate() + 1);
 
     const [ownRevenue, waitingQueue, rxCount, upcomingNext] = await Promise.all([
@@ -676,11 +709,10 @@ export const getDoctorDashboardStats = async (req, res) => {
         { $match: { ...branchScope, doctorId, paymentStatus: { $ne: 'cancelled' } } },
         { $group: { _id: null, paid: { $sum: '$paidAmount' }, billed: { $sum: '$total' }, due: { $sum: '$dueAmount' } } },
       ]),
-      // Same day-range pattern as queueController — exact midnight equality misses tickets.
       QueueTicket.find({
         ...branchScope,
         doctorId,
-        queueDate: { $gte: todayStart, $lt: tomorrowStart },
+        queueDate: { $gte: dayStart, $lt: tomorrowStart },
         status: { $in: ['waiting', 'called', 'in_consultation'] },
       })
         .sort({ tokenNumber: 1 })
@@ -688,7 +720,6 @@ export const getDoctorDashboardStats = async (req, res) => {
         .populate('patientId', 'name patientCode')
         .populate('appointmentId', 'timeSlot appointmentType status'),
       Prescription.countDocuments({ ...branchScope, doctorId }),
-      // Upcoming list = from tomorrow (today’s list is separate)
       Appointment.find({
         ...branchScope,
         doctor: doctorId,
@@ -700,19 +731,41 @@ export const getDoctorDashboardStats = async (req, res) => {
         .populate(APPT_POPULATE),
     ]);
 
+    const sortedPeriodAppts = [...periodAppts].sort((a, b) => {
+      const da = new Date(a.appointmentDate).getTime() - new Date(b.appointmentDate).getTime();
+      if (da !== 0) return da;
+      return String(a.timeSlot || '').localeCompare(String(b.timeSlot || ''));
+    });
+
+    const periodStats = {
+      key: period,
+      from: rangeStart.toISOString(),
+      to: rangeEnd.toISOString(),
+      total: sortedPeriodAppts.length,
+      scheduled: countByStatus(sortedPeriodAppts, 'scheduled') + countByStatus(sortedPeriodAppts, 'confirmed'),
+      completed: countByStatus(sortedPeriodAppts, 'completed'),
+      cancelled: countByStatus(sortedPeriodAppts, 'cancelled'),
+      noShow: countByStatus(sortedPeriodAppts, 'no_show'),
+      patients: patientsInPeriod,
+      appointments: sortedPeriodAppts,
+    };
+
     res.json({
       success: true,
       stats: {
+        period: periodStats,
+        // Keep `today` shape for older clients — mirrors selected period
         today: {
-          total: todayAppts.length,
-          scheduled: countByStatus(todayAppts, 'scheduled') + countByStatus(todayAppts, 'confirmed'),
-          completed: countByStatus(todayAppts, 'completed'),
-          cancelled: countByStatus(todayAppts, 'cancelled'),
-          noShow: countByStatus(todayAppts, 'no_show'),
-          appointments: todayAppts.sort((a, b) => String(a.timeSlot).localeCompare(String(b.timeSlot))),
+          total: periodStats.total,
+          scheduled: periodStats.scheduled,
+          completed: periodStats.completed,
+          cancelled: periodStats.cancelled,
+          noShow: periodStats.noShow,
+          appointments: periodStats.appointments,
         },
         patients: {
           total: totalPatients,
+          inPeriod: patientsInPeriod,
           newThisWeek: newPatients,
           returning: returningPatients,
           recent: recentPatients,

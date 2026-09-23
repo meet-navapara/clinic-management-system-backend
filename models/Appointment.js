@@ -12,6 +12,14 @@ export const APPOINTMENT_STATUSES = [
 
 export const ACTIVE_APPOINTMENT_STATUSES = ['scheduled', 'confirmed', 'pending'];
 
+/** Statuses that occupy a time slot (cancelled / no_show free it). */
+export const SLOT_BLOCKING_STATUSES = [
+  'scheduled',
+  'confirmed',
+  'pending',
+  'completed',
+];
+
 const appointmentSchema = new mongoose.Schema(
   {
     clinicId: {
