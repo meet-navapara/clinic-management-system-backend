@@ -9,6 +9,21 @@ import { notifyDoctor } from './doctorNotify.js';
 import { recordPatientEvent } from './patientTimeline.js';
 import { getCommsConfigStatus, sendViaChannel } from './comms/providers.js';
 
+const isConfirmationType = (kind) => kind === 'appointment_confirmation';
+
+function inboxWhatsAppCopy({ kind, ok, patientName, dateLabel, timeSlot, reason = '' }) {
+  const confirm = isConfirmationType(kind);
+  const label = confirm ? 'Confirmation' : 'Reminder';
+  const visit = [dateLabel, timeSlot].filter(Boolean).join(' · ');
+  const who = patientName || 'Patient';
+  const parts = [who, visit].filter(Boolean);
+  if (!ok && reason) parts.push(reason);
+  return {
+    title: ok ? `WhatsApp ${label.toLowerCase()} sent` : `WhatsApp ${label.toLowerCase()} failed`,
+    body: parts.join(' · '),
+  };
+}
+
 const combineDateAndSlot = (appointmentDate, timeSlot) => {
   const date = new Date(appointmentDate);
   const [hours, minutes] = String(timeSlot || '09:00').split(':').map(Number);
@@ -298,10 +313,23 @@ export const processDueReminders = async ({ clinicId = null } = {}) => {
           doctorId: appointment.doctor?._id || appointment.doctor,
           clinicId: appointment.clinicId?._id || appointment.clinicId,
           type: 'reminder_failed',
-          title: 'WhatsApp reminder failed',
-          body: 'WhatsApp provider not configured.',
+          ...inboxWhatsAppCopy({
+            kind: log.notificationType,
+            ok: false,
+            patientName,
+            dateLabel,
+            timeSlot: appointment.timeSlot || '',
+            reason: 'WhatsApp is not configured.',
+          }),
           link: `/doctor/appointments/${appointment._id}`,
-          metadata: { notificationLogId: log._id, appointmentId: appointment._id },
+          metadata: {
+            notificationLogId: log._id,
+            appointmentId: appointment._id,
+            patientName,
+            dateLabel,
+            timeSlot: appointment.timeSlot || '',
+            kind: log.notificationType,
+          },
         });
         continue;
       }
@@ -315,10 +343,23 @@ export const processDueReminders = async ({ clinicId = null } = {}) => {
           doctorId: appointment.doctor?._id || appointment.doctor,
           clinicId: appointment.clinicId?._id || appointment.clinicId,
           type: 'reminder_failed',
-          title: 'WhatsApp reminder failed',
-          body: `${patientName} has no phone number on file.`,
+          ...inboxWhatsAppCopy({
+            kind: log.notificationType,
+            ok: false,
+            patientName,
+            dateLabel,
+            timeSlot: appointment.timeSlot || '',
+            reason: 'No phone number on file.',
+          }),
           link: `/doctor/appointments/${appointment._id}`,
-          metadata: { notificationLogId: log._id, appointmentId: appointment._id },
+          metadata: {
+            notificationLogId: log._id,
+            appointmentId: appointment._id,
+            patientName,
+            dateLabel,
+            timeSlot: appointment.timeSlot || '',
+            kind: log.notificationType,
+          },
         });
         continue;
       }
@@ -375,10 +416,22 @@ export const processDueReminders = async ({ clinicId = null } = {}) => {
         doctorId: appointment.doctor?._id || appointment.doctor,
         clinicId: appointment.clinicId?._id || appointment.clinicId,
         type: 'reminder_sent',
-        title: 'Patient WhatsApp reminder sent',
-        body: log.message?.slice(0, 140) || 'Reminder delivered.',
+        ...inboxWhatsAppCopy({
+          kind: log.notificationType,
+          ok: true,
+          patientName,
+          dateLabel,
+          timeSlot: appointment.timeSlot || '',
+        }),
         link: `/doctor/appointments/${appointment._id}`,
-        metadata: { notificationLogId: log._id, appointmentId: appointment._id },
+        metadata: {
+          notificationLogId: log._id,
+          appointmentId: appointment._id,
+          patientName,
+          dateLabel,
+          timeSlot: appointment.timeSlot || '',
+          kind: log.notificationType,
+        },
       });
 
       processed += 1;
@@ -395,9 +448,20 @@ export const processDueReminders = async ({ clinicId = null } = {}) => {
             doctorId: appointment.doctor,
             clinicId: appointment.clinicId,
             type: 'reminder_failed',
-            title: 'WhatsApp reminder failed',
-            body: error.message,
+            ...inboxWhatsAppCopy({
+              kind: log.notificationType,
+              ok: false,
+              patientName: log.recipientName || 'Patient',
+              dateLabel: '',
+              timeSlot: '',
+              reason: error.message,
+            }),
             link: `/doctor/appointments/${appointment._id}`,
+            metadata: {
+              appointmentId: appointment._id,
+              kind: log.notificationType,
+              patientName: log.recipientName || 'Patient',
+            },
           });
         }
       } catch {

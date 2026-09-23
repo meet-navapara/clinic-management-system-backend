@@ -530,7 +530,9 @@ export const updateProfile = async (req, res) => {
             Math.min(240, Number(parsed.defaultDurationMinutes) || existing.defaultDurationMinutes || 30)
           ),
           reminderHoursBefore: Array.isArray(parsed.reminderHoursBefore)
-            ? parsed.reminderHoursBefore.filter((n) => Number(n) > 0)
+            ? parsed.reminderHoursBefore
+                .map((n) => Number(n))
+                .filter((n) => Number.isFinite(n) && n > 0)
             : existing.reminderHoursBefore || [24, 2],
           appointmentTypes: Array.isArray(parsed.appointmentTypes)
             ? parsed.appointmentTypes.filter(Boolean)
