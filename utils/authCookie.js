@@ -1,11 +1,19 @@
 const TOKEN_COOKIE = 'cms_token';
 
+/**
+ * Live frontend (zhealth.world) and API (often a separate host) are cross-site.
+ * Browsers only send cookies on cross-site XHR when SameSite=None + Secure.
+ * Lax works for same-origin / localhost, which is why local multi-tab login works.
+ */
 function cookieOptions() {
   const isProd = process.env.NODE_ENV === 'production';
-  const sameSite = process.env.COOKIE_SAME_SITE || (isProd ? 'lax' : 'lax');
+  const sameSiteRaw = String(
+    process.env.COOKIE_SAME_SITE || (isProd ? 'none' : 'lax')
+  ).toLowerCase();
+  const sameSite = ['none', 'lax', 'strict'].includes(sameSiteRaw) ? sameSiteRaw : 'lax';
   const secure =
     process.env.COOKIE_SECURE === 'true' ||
-    (process.env.COOKIE_SECURE !== 'false' && isProd);
+    (process.env.COOKIE_SECURE !== 'false' && (isProd || sameSite === 'none'));
   return {
     httpOnly: true,
     secure,
