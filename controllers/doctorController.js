@@ -104,6 +104,33 @@ export const getDoctorAvailability = async (req, res) => {
       )
     );
 
+    const workingDays =
+      doctor.availableDays?.length > 0
+        ? doctor.availableDays
+        : ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+
+    // Off days (e.g. Sat/Sun when not in availableDays) offer no bookable slots.
+    if (date) {
+      const dayName = new Date(`${date}T12:00:00`).toLocaleDateString('en-US', {
+        weekday: 'long',
+      });
+      if (!workingDays.includes(dayName)) {
+        return res.json({
+          success: true,
+          doctorId: doctor._id,
+          clinicId: doctor.clinicId || null,
+          availableDays: doctor.availableDays,
+          durationMinutes,
+          dayStart: doctor.practiceSettings?.dayStart || '09:00',
+          dayEnd: doctor.practiceSettings?.dayEnd || '18:00',
+          allSlots: [],
+          availableSlots: [],
+          bookedSlots: [],
+          dayAvailable: false,
+        });
+      }
+    }
+
     const settings = doctor.practiceSettings || {};
     const legacyWindow = windowFromLegacySlots(doctor.availableSlots);
     const dayStart = settings.dayStart || legacyWindow.dayStart;
@@ -166,6 +193,7 @@ export const getDoctorAvailability = async (req, res) => {
       allSlots,
       availableSlots,
       bookedSlots,
+      dayAvailable: true,
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

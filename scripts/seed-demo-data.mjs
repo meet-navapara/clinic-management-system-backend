@@ -25,9 +25,6 @@ import InventoryTransaction from '../models/InventoryTransaction.js';
 import ClinicalTemplate from '../models/ClinicalTemplate.js';
 import Consultation from '../models/Consultation.js';
 import Prescription from '../models/Prescription.js';
-import ConsentTemplate from '../models/ConsentTemplate.js';
-import ConsentRecord from '../models/ConsentRecord.js';
-import QueueTicket from '../models/QueueTicket.js';
 import Campaign from '../models/Campaign.js';
 import CampaignDelivery from '../models/CampaignDelivery.js';
 import PrintSettings from '../models/PrintSettings.js';
@@ -128,7 +125,6 @@ async function main() {
     (await Branch.findOne({ clinicId: clinic._id }).sort({ createdAt: 1 }));
   if (!mainBranch) throw new Error('No branch found. Restart the backend once so V2 migration can create Main.');
 
-  mainBranch.tokenPrefix = mainBranch.tokenPrefix || 'A';
   mainBranch.roomLabel = mainBranch.roomLabel || 'Consult 1';
   mainBranch.displayTitle = mainBranch.displayTitle || `${clinic.name} — Main`;
   mainBranch.phone = mainBranch.phone || clinic.phone || '022-4001-1100';
@@ -149,7 +145,6 @@ async function main() {
       isActive: true,
       displayTitle: `${clinic.name} — Andheri`,
       roomLabel: 'Consult 2',
-      tokenPrefix: 'B',
     }
   );
   counts.branches = west.created ? 1 : 0;
@@ -741,102 +736,6 @@ async function main() {
     }
   }
 
-  const todayAppts = appointments.filter((a) => a.appointmentDate.getTime() === day(0).getTime() && ['scheduled', 'confirmed'].includes(a.status));
-  const queueStates = ['waiting', 'called', 'in_consultation', 'waiting', 'waiting'];
-  counts.queue = 0;
-  let token = 1;
-  for (let i = 0; i < todayAppts.length; i += 1) {
-    const appt = todayAppts[i];
-    const branchId = appt.branchId || mainBranch._id;
-    const existing = await QueueTicket.findOne({
-      clinicId: clinic._id,
-      appointmentId: appt._id,
-      queueDate: day(0),
-    });
-    if (existing) continue;
-    const status = queueStates[i] || 'waiting';
-    const now = new Date();
-    await QueueTicket.create({
-      clinicId: clinic._id,
-      branchId,
-      doctorId: appt.doctor,
-      patientId: appt.patientId,
-      appointmentId: appt._id,
-      tokenNumber: token,
-      tokenLabel: `${branchId.equals(westBranch._id) ? 'B' : 'A'}${token}`,
-      roomLabel: branchId.equals(westBranch._id) ? westBranch.roomLabel : mainBranch.roomLabel,
-      status,
-      queueDate: day(0),
-      checkedInAt: at(0, 8, 40 + i * 8),
-      calledAt: ['called', 'in_consultation'].includes(status) ? now : null,
-      startedAt: status === 'in_consultation' ? now : null,
-      createdBy: admin._id,
-    });
-    token += 1;
-    counts.queue += 1;
-  }
-
-  const consentBodies = [
-    {
-      name: 'General treatment consent',
-      category: 'treatment',
-      body: 'I consent to Ayurvedic consultation and treatment at this clinic. I have been informed of the nature of care, possible benefits, and that outcomes vary. I may withdraw consent at any time.',
-    },
-    {
-      name: 'Panchakarma procedure consent',
-      category: 'procedure',
-      body: 'I consent to Panchakarma procedures including snehana, swedana, and related therapies as advised. I confirm I have disclosed pregnancy, bleeding disorders, and current medicines. I understand rest and diet are part of care.',
-    },
-    {
-      name: 'Privacy & records consent',
-      category: 'privacy',
-      body: 'I consent to the clinic storing my health records for treatment, billing, and legally required retention. Data is not shared outside the clinic except as required by law or with my written permission.',
-    },
-  ];
-  counts.consentTemplates = 0;
-  const consentTpls = [];
-  for (const spec of consentBodies) {
-    const { doc, created } = await ensure(
-      ConsentTemplate,
-      { clinicId: clinic._id, name: spec.name },
-      { clinicId: clinic._id, ...spec, version: 1, isActive: true }
-    );
-    if (created) counts.consentTemplates += 1;
-    consentTpls.push(doc);
-  }
-
-  counts.consentRecords = 0;
-  const consentRecordPlans = [
-    { patient: '9876500101', tpl: 0, status: 'accepted' },
-    { patient: '9876500102', tpl: 1, status: 'accepted' },
-    { patient: '9876500104', tpl: 0, status: 'pending' },
-    { patient: '9876500106', tpl: 2, status: 'rejected' },
-  ];
-  for (const plan of consentRecordPlans) {
-    const patient = byPhone(plan.patient);
-    const tpl = consentTpls[plan.tpl];
-    const { created } = await ensure(
-      ConsentRecord,
-      { clinicId: clinic._id, patientId: patient._id, consentTemplateId: tpl._id },
-      {
-        clinicId: clinic._id,
-        branchId: patient.branchId,
-        consentTemplateId: tpl._id,
-        patientId: patient._id,
-        doctorId: patient.doctorId,
-        version: tpl.version,
-        titleSnapshot: tpl.name,
-        bodySnapshot: tpl.body,
-        status: plan.status,
-        signedAt: plan.status === 'accepted' ? day(-1) : null,
-        signatureDataUrl: plan.status === 'accepted' ? SIGNATURE : '',
-        signerName: plan.status === 'accepted' ? patient.name : '',
-        capturedBy: admin._id,
-      }
-    );
-    if (created) counts.consentRecords += 1;
-  }
-
   counts.campaigns = 0;
   const { doc: campDone, created: campDoneNew } = await ensure(
     Campaign,
@@ -981,7 +880,6 @@ async function main() {
     { action: 'branch_created', entityType: 'Branch', detail: 'Andheri West branch' },
     { action: 'invoice_created', entityType: 'Invoice', detail: 'Demo invoices seeded' },
     { action: 'campaign_sent', entityType: 'Campaign', detail: 'Follow-up wellness campaign' },
-    { action: 'queue_checkin', entityType: 'QueueTicket', detail: 'Morning queue opened' },
   ];
   for (const item of auditItems) {
     const { created } = await ensure(
@@ -1007,7 +905,7 @@ async function main() {
   console.log('  Doctor        dr.arjun@demo.shreeshakti.local');
   console.log('  Pending doctor dr.pending@demo.shreeshakti.local  (shows on admin Approvals)');
   console.log('\nCheck: Dashboard, Front desk, Patients, Calendar, Queue, Billing, Revenue,');
-  console.log('Medicines, Inventory (low stock + expiring), Templates, Consent, Campaigns,');
+  console.log('Medicines, Inventory (low stock + expiring), Templates, Campaigns,');
   console.log('Staff, Branches, Search, Print settings, Patient billing tab, Start consultation.\n');
 
   await mongoose.disconnect();

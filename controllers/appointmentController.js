@@ -698,27 +698,16 @@ export const getDoctorDashboardStats = async (req, res) => {
       .select('name patientCode phone createdAt gender age');
 
     const Invoice = (await import('../models/Invoice.js')).default;
-    const QueueTicket = (await import('../models/QueueTicket.js')).default;
     const Prescription = (await import('../models/Prescription.js')).default;
 
     const tomorrowStart = new Date(dayStart);
     tomorrowStart.setDate(tomorrowStart.getDate() + 1);
 
-    const [ownRevenue, waitingQueue, rxCount, upcomingNext] = await Promise.all([
+    const [ownRevenue, rxCount, upcomingNext] = await Promise.all([
       Invoice.aggregate([
         { $match: { ...branchScope, doctorId, paymentStatus: { $ne: 'cancelled' } } },
         { $group: { _id: null, paid: { $sum: '$paidAmount' }, billed: { $sum: '$total' }, due: { $sum: '$dueAmount' } } },
       ]),
-      QueueTicket.find({
-        ...branchScope,
-        doctorId,
-        queueDate: { $gte: dayStart, $lt: tomorrowStart },
-        status: { $in: ['waiting', 'called', 'in_consultation'] },
-      })
-        .sort({ tokenNumber: 1 })
-        .limit(8)
-        .populate('patientId', 'name patientCode')
-        .populate('appointmentId', 'timeSlot appointmentType status'),
       Prescription.countDocuments({ ...branchScope, doctorId }),
       Appointment.find({
         ...branchScope,
@@ -784,7 +773,6 @@ export const getDoctorDashboardStats = async (req, res) => {
           billed: ownRevenue[0]?.billed || 0,
           due: ownRevenue[0]?.due || 0,
         },
-        queue: waitingQueue,
         prescriptions: { total: rxCount },
       },
     });

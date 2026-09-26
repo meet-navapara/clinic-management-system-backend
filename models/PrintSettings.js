@@ -5,9 +5,7 @@ export const PRINT_DOC_TYPES = [
   'receipt',
   'prescription',
   'consultation',
-  'consent',
   'appointment_slip',
-  'queue_token',
 ];
 
 /**

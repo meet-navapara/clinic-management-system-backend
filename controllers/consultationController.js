@@ -3,7 +3,6 @@ import Prescription from '../models/Prescription.js';
 import Appointment from '../models/Appointment.js';
 import Patient from '../models/Patient.js';
 import Invoice from '../models/Invoice.js';
-import QueueTicket from '../models/QueueTicket.js';
 import { asyncHandler } from '../middleware/access.js';
 import { assertSameClinic, assertBranchAccess } from '../utils/branchScope.js';
 import { writeAudit, AUDIT } from '../utils/audit.js';
@@ -162,23 +161,6 @@ export const upsertConsultation = asyncHandler(async (req, res) => {
         await appt.save();
       }
       await cancelAppointmentReminders(consultation.appointmentId).catch(() => {});
-      await QueueTicket.updateMany(
-        {
-          appointmentId: consultation.appointmentId,
-          status: { $in: ['waiting', 'called', 'in_consultation'] },
-        },
-        { $set: { status: 'completed', completedAt: new Date() } }
-      ).catch(() => {});
-    } else {
-      await QueueTicket.updateMany(
-        {
-          patientId: consultation.patientId,
-          clinicId: consultation.clinicId,
-          status: { $in: ['waiting', 'called', 'in_consultation'] },
-          ...(consultation.branchId ? { branchId: consultation.branchId } : {}),
-        },
-        { $set: { status: 'completed', completedAt: new Date() } }
-      ).catch(() => {});
     }
     if (req.body.createInvoice && hasPermission(req.user, P.BILLING_MANAGE)) {
       const existing = await Invoice.findOne({

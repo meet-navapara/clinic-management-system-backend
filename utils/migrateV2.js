@@ -9,7 +9,6 @@ import Invoice from '../models/Invoice.js';
 import Payment from '../models/Payment.js';
 import Consultation from '../models/Consultation.js';
 import Prescription from '../models/Prescription.js';
-import ConsentRecord from '../models/ConsentRecord.js';
 
 const DEFAULT_CLINICAL_TEMPLATES = [
   {
@@ -197,13 +196,11 @@ export const migrateV2Foundation = async () => {
     const paymentResult = await Payment.updateMany(missingBranch, { $set: { branchId: defaultBranch._id } });
     const consultResult = await Consultation.updateMany(missingBranch, { $set: { branchId: defaultBranch._id } });
     const rxResult = await Prescription.updateMany(missingBranch, { $set: { branchId: defaultBranch._id } });
-    const consentResult = await ConsentRecord.updateMany(missingBranch, { $set: { branchId: defaultBranch._id } });
     extraPatched +=
       (invoiceResult.modifiedCount || 0) +
       (paymentResult.modifiedCount || 0) +
       (consultResult.modifiedCount || 0) +
-      (rxResult.modifiedCount || 0) +
-      (consentResult.modifiedCount || 0);
+      (rxResult.modifiedCount || 0);
 
     const seeded = await seedClinicTemplates(clinic._id);
     if (seeded) {

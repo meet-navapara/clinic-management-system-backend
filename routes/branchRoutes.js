@@ -14,7 +14,7 @@ import { branchCreateValidation, handleValidation } from '../middleware/validato
 const router = Router();
 router.use(protect, requireClinicUser, attachBranchContext);
 
-router.get('/', requirePermission(P.BRANCHES_VIEW, P.QUEUE_MANAGE, P.BILLING_VIEW), listBranches);
+router.get('/', requirePermission(P.BRANCHES_VIEW, P.BILLING_VIEW), listBranches);
 router.post(
   '/',
   requireClinicDoctor,

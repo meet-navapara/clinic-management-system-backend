@@ -16,7 +16,6 @@ export const PATIENT_EVENT_TYPES = [
   'prescription_created',
   'invoice_created',
   'payment_received',
-  'consent_signed',
 ];
 
 /**

@@ -35,10 +35,10 @@ router.post(
 );
 router.get(
   '/print/preview',
-  requirePermission(P.PRINT_SETTINGS, P.BILLING_VIEW, P.CONSULTATION, P.QUEUE_MANAGE, P.CONSENT_CAPTURE, P.CONSENT_TEMPLATES),
+  requirePermission(P.PRINT_SETTINGS, P.BILLING_VIEW, P.CONSULTATION),
   printPreview
 );
-router.get('/print/:type/:id', requirePermission(P.BILLING_VIEW, P.CONSULTATION, P.QUEUE_MANAGE, P.CONSENT_CAPTURE, P.CONSENT_TEMPLATES, P.APPOINTMENTS_VIEW), printPayload);
+router.get('/print/:type/:id', requirePermission(P.BILLING_VIEW, P.CONSULTATION, P.APPOINTMENTS_VIEW), printPayload);
 router.get('/search', requirePermission(P.SEARCH), globalSearch);
 
 router.get(

@@ -4,8 +4,6 @@ import Invoice from '../models/Invoice.js';
 import Payment from '../models/Payment.js';
 import Prescription from '../models/Prescription.js';
 import Consultation from '../models/Consultation.js';
-import ConsentRecord from '../models/ConsentRecord.js';
-import QueueTicket from '../models/QueueTicket.js';
 import Appointment from '../models/Appointment.js';
 import { asyncHandler } from '../middleware/access.js';
 import { clinicQuery, assertSameClinic, assertBranchAccess } from '../utils/branchScope.js';
@@ -296,24 +294,6 @@ export const printPayload = asyncHandler(async (req, res) => {
     assertBranchAccess(req.user, consultation.branchId);
     const prescription = await Prescription.findOne({ consultationId: consultation._id });
     return res.json({ success: true, type, branding, consultation, prescription });
-  }
-
-  if (type === 'consent') {
-    const record = await ConsentRecord.findById(id)
-      .populate('patientId', 'name patientCode')
-      .populate('doctorId', 'name');
-    if (!record) return res.status(404).json({ success: false, message: 'Consent not found.' });
-    assertSameClinic(req.user, record.clinicId);
-    assertBranchAccess(req.user, record.branchId);
-    return res.json({ success: true, type, branding, record });
-  }
-
-  if (type === 'queue_token') {
-    const ticket = await QueueTicket.findById(id).populate('patientId', 'name').populate('branchId', 'name roomLabel');
-    if (!ticket) return res.status(404).json({ success: false, message: 'Token not found.' });
-    assertSameClinic(req.user, ticket.clinicId);
-    assertBranchAccess(req.user, ticket.branchId);
-    return res.json({ success: true, type, branding, ticket });
   }
 
   if (type === 'appointment_slip') {

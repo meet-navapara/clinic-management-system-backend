@@ -71,7 +71,6 @@ export const createBranch = asyncHandler(async (req, res) => {
     displayTitle: req.body.displayTitle || '',
     roomLabel,
     rooms: rooms.includes(roomLabel) ? rooms : [roomLabel, ...rooms],
-    tokenPrefix: req.body.tokenPrefix || '',
     isDefault: exists === 0,
     isActive: true,
   });
@@ -102,7 +101,6 @@ export const updateBranch = asyncHandler(async (req, res) => {
     'appointmentDuration',
     'logo',
     'displayTitle',
-    'tokenPrefix',
     'isActive',
   ];
   for (const field of fields) {

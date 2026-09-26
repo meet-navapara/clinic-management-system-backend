@@ -6,7 +6,6 @@ import Invoice from '../models/Invoice.js';
 import Payment from '../models/Payment.js';
 import Consultation from '../models/Consultation.js';
 import Prescription from '../models/Prescription.js';
-import ConsentRecord from '../models/ConsentRecord.js';
 import { DEFAULT_CLINIC_SLUG, DEFAULT_CLINIC_NAME } from './migrateClinic.js';
 import { provisionClinicForDoctor } from './clinicProvisioning.js';
 
@@ -96,10 +95,6 @@ export const migrateDoctorClinicIsolation = async () => {
         { $set: { clinicId: clinic._id, branchId: branch._id } }
       );
       await Prescription.updateMany(
-        { patientId: { $in: patientIds }, clinicId: shared._id },
-        { $set: { clinicId: clinic._id, branchId: branch._id } }
-      );
-      await ConsentRecord.updateMany(
         { patientId: { $in: patientIds }, clinicId: shared._id },
         { $set: { clinicId: clinic._id, branchId: branch._id } }
       );
