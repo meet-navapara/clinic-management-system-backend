@@ -240,7 +240,7 @@ async function main() {
     await admin.save();
   }
 
-  await seedClinicTemplates(clinic._id);
+  await seedClinicTemplates(clinic._id, mainBranch._id);
   await ensure(
     ClinicalTemplate,
     { clinicId: clinic._id, name: 'Panchakarma intake', ownerType: 'doctor', doctorId: doctor._id },

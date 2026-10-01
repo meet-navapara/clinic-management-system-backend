@@ -1,9 +1,8 @@
 import Branch from '../models/Branch.js';
 import User from '../models/User.js';
 import { asyncHandler } from '../middleware/access.js';
-import { clinicQuery, canAccessBranch, assertSameClinic } from '../utils/branchScope.js';
+import { clinicQuery, canAccessBranch, assertSameClinic, getAccessibleBranchIds } from '../utils/branchScope.js';
 import { writeAudit, AUDIT } from '../utils/audit.js';
-import { ADMIN_ROLES } from '../utils/permissions.js';
 
 function normalizeRooms(input, fallbackLabel = 'Room 1') {
   const list = Array.isArray(input)
@@ -33,10 +32,10 @@ export const listBranches = asyncHandler(async (req, res) => {
     else filter.isActive = true;
   }
   const branches = await Branch.find(filter).sort({ isDefault: -1, name: 1 }).populate('managerId', 'name email');
-  const visible = ADMIN_ROLES.includes(req.user.role)
-    ? branches
-    : branches.filter((b) => canAccessBranch(req.user, b._id));
-  res.json({ success: true, branches: visible });
+  const allowed = getAccessibleBranchIds(req.user);
+  const visible =
+    allowed === null ? branches : branches.filter((b) => canAccessBranch(req.user, b._id));
+  res.json({ success: true, branches: visible, clinicWideAccess: allowed === null });
 });
 
 export const getBranch = asyncHandler(async (req, res) => {
@@ -53,6 +52,13 @@ export const createBranch = asyncHandler(async (req, res) => {
   const clinicId = req.user.clinicId;
   if (!clinicId) {
     return res.status(400).json({ success: false, message: 'No clinic on this account.' });
+  }
+  // Only Main / clinic-wide doctors may open new branches.
+  if (getAccessibleBranchIds(req.user) !== null) {
+    return res.status(403).json({
+      success: false,
+      message: 'Only a Main branch doctor can create new branches.',
+    });
   }
   const exists = await Branch.countDocuments({ clinicId });
   const rooms = normalizeRooms(req.body.rooms, req.body.roomLabel || 'Room 1');
@@ -90,6 +96,16 @@ export const updateBranch = asyncHandler(async (req, res) => {
   const branch = await Branch.findById(req.params.id);
   if (!branch) return res.status(404).json({ success: false, message: 'Branch not found.' });
   assertSameClinic(req.user, branch.clinicId);
+  if (!canAccessBranch(req.user, branch._id)) {
+    return res.status(403).json({ success: false, message: 'You do not have access to this branch.' });
+  }
+  const clinicWide = getAccessibleBranchIds(req.user) === null;
+  if (!clinicWide && (req.body.isDefault === true || req.body.isActive === false)) {
+    return res.status(403).json({
+      success: false,
+      message: 'Only a Main branch doctor can change Main/default or disable branches.',
+    });
+  }
   const fields = [
     'name',
     'code',
@@ -169,6 +185,9 @@ export const assignStaffToBranch = asyncHandler(async (req, res) => {
   const branch = await Branch.findById(req.params.id);
   if (!branch) return res.status(404).json({ success: false, message: 'Branch not found.' });
   assertSameClinic(req.user, branch.clinicId);
+  if (!canAccessBranch(req.user, branch._id)) {
+    return res.status(403).json({ success: false, message: 'You can only assign staff to your own branch.' });
+  }
   if (branch.isActive === false) {
     return res.status(400).json({ success: false, message: 'Cannot assign staff to a disabled branch.' });
   }

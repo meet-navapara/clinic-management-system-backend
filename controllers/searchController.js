@@ -14,9 +14,8 @@ export const globalSearch = asyncHandler(async (req, res) => {
   const rx = new RegExp(escapeRegex(q), 'i');
   const clinic = clinicQuery(req.user);
   const branch = tenantFilter(req.user, req.branchId);
-  const isDoctor = req.user.role === 'doctor';
 
-  // Clinic-wide patient chart (same as Patients list). Doctor filter stays on appointments/revenue.
+  // Clinic/branch patient chart (same as Patients list).
   const patientScope = {
     ...branch,
     isActive: true,
@@ -46,7 +45,6 @@ export const globalSearch = asyncHandler(async (req, res) => {
   if (hasPermission(req.user, P.APPOINTMENTS_VIEW)) {
     tasks.appointments = Appointment.find({
       ...branch,
-      ...(isDoctor ? { doctor: req.user._id } : {}),
       $or: [{ reason: rx }, { appointmentType: rx }, { timeSlot: rx }, { patientId: { $in: patientIds } }],
     })
       .populate('patientId', 'name phone')
@@ -57,7 +55,6 @@ export const globalSearch = asyncHandler(async (req, res) => {
   if (hasPermission(req.user, P.BILLING_VIEW)) {
     const invoiceFilter = {
       ...branch,
-      ...(isDoctor && !hasPermission(req.user, P.REVENUE_ALL) ? { doctorId: req.user._id } : {}),
       $or: [{ invoiceNumber: rx }, ...(patientIds.length ? [{ patientId: { $in: patientIds } }] : [])],
     };
     tasks.invoices = Invoice.find(invoiceFilter)

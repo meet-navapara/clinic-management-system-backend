@@ -39,12 +39,27 @@ export const authLimiter = rateLimit({
   message: jsonMessage('Too many auth attempts. Please try again later.'),
 });
 
-/** Slightly stricter on password login specifically */
+/** Password login — keyed by IP + email so one account's failures don't lock every user on the same network. */
 export const loginLimiter = rateLimit({
   ...safeDefaults,
   windowMs: 15 * 60 * 1000,
-  max: 10,
+  max: process.env.NODE_ENV === 'production' ? 20 : 200,
   message: jsonMessage('Too many login attempts. Please try again later.'),
+  keyGenerator: (req) => {
+    const email = String(req.body?.email || '')
+      .trim()
+      .toLowerCase();
+    const forwarded = req.headers['x-forwarded-for'];
+    const fromHeader =
+      typeof forwarded === 'string'
+        ? forwarded.split(',')[0]?.trim()
+        : Array.isArray(forwarded)
+          ? forwarded[0]
+          : '';
+    const ip = req.ip || req.socket?.remoteAddress || fromHeader || 'unknown';
+    const ipKey = ip === 'unknown' ? 'unknown' : ipKeyGenerator(ip);
+    return `${ipKey}:${email || 'no-email'}`;
+  },
 });
 
 /** Light general API ceiling — avoids breaking normal clinic usage */

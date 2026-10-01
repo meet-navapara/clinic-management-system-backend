@@ -5,7 +5,7 @@ import User from '../models/User.js';
 import Clinic from '../models/Clinic.js';
 import generateToken from '../utils/generateToken.js';
 import { setAuthCookie, clearAuthCookie } from '../utils/authCookie.js';
-import { toAuthUser } from '../utils/authUser.js';
+import { toAuthUser, toAuthUserWithScope } from '../utils/authUser.js';
 import { isStaffAccount } from '../utils/permissions.js';
 import { assertStaffBranchOperational } from '../utils/branchScope.js';
 import {
@@ -437,7 +437,7 @@ export const login = async (req, res) => {
       success: true,
       message: 'Login successful.',
       token,
-      user: toAuthUser(user),
+      user: await toAuthUserWithScope(user),
     });
   } catch (error) {
     console.error(error);
@@ -446,7 +446,7 @@ export const login = async (req, res) => {
 };
 
 export const getMe = async (req, res) => {
-  res.json({ success: true, user: toAuthUser(req.user) });
+  res.json({ success: true, user: await toAuthUserWithScope(req.user) });
 };
 
 const MAX_PHOTO_DATA_URL = 500000;

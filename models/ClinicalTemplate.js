@@ -11,6 +11,7 @@ export const TEMPLATE_TYPES = [
 const clinicalTemplateSchema = new mongoose.Schema(
   {
     clinicId: { type: mongoose.Schema.Types.ObjectId, ref: 'Clinic', required: true, index: true },
+    branchId: { type: mongoose.Schema.Types.ObjectId, ref: 'Branch', default: null, index: true },
     doctorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null, index: true },
     ownerType: { type: String, enum: ['doctor', 'clinic'], default: 'doctor', index: true },
     type: { type: String, enum: TEMPLATE_TYPES, default: 'consultation', index: true },
@@ -30,6 +31,7 @@ const clinicalTemplateSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+clinicalTemplateSchema.index({ clinicId: 1, branchId: 1, type: 1 });
 clinicalTemplateSchema.index({ clinicId: 1, doctorId: 1, type: 1 });
 
 const ClinicalTemplate = mongoose.model('ClinicalTemplate', clinicalTemplateSchema);

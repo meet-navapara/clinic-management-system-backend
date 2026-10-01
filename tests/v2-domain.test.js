@@ -94,17 +94,47 @@ describe('permissions', () => {
 });
 
 describe('branch access', () => {
-  const doctor = { role: 'doctor', clinicId: 'c1', branchIds: ['b1'], defaultBranchId: 'b1' };
+  const clinicWideDoctor = {
+    role: 'doctor',
+    clinicId: 'c1',
+    branchIds: ['main'],
+    defaultBranchId: 'main',
+    _accessibleBranchIds: null,
+  };
+  const scopedDoctor = {
+    role: 'doctor',
+    clinicId: 'c1',
+    branchIds: ['b2'],
+    defaultBranchId: 'b2',
+    _accessibleBranchIds: ['b2'],
+  };
 
-  it('doctor can access any branch in their clinic', () => {
+  it('clinic-wide doctor (Main) can access any branch', () => {
+    assert.equal(getAccessibleBranchIds(clinicWideDoctor), null);
+    assert.equal(canAccessBranch(clinicWideDoctor, 'b2'), true);
+    assert.deepEqual(tenantFilter(clinicWideDoctor, null), { clinicId: 'c1' });
+    assert.deepEqual(tenantFilter(clinicWideDoctor, 'b1'), { clinicId: 'c1', branchId: 'b1' });
+  });
+
+  it('doctor without resolved scope stays clinic-wide (safe default)', () => {
+    const doctor = { role: 'doctor', clinicId: 'c1', branchIds: ['b1'], defaultBranchId: 'b1' };
     assert.equal(getAccessibleBranchIds(doctor), null);
     assert.equal(canAccessBranch(doctor, 'b2'), true);
-    assert.deepEqual(tenantFilter(doctor, null), { clinicId: 'c1' });
-    assert.deepEqual(tenantFilter(doctor, 'b1'), { clinicId: 'c1', branchId: 'b1' });
+  });
+
+  it('scoped doctor only sees assigned branch records', () => {
+    assert.deepEqual(getAccessibleBranchIds(scopedDoctor), ['b2']);
+    assert.equal(canAccessBranch(scopedDoctor, 'b2'), true);
+    assert.equal(canAccessBranch(scopedDoctor, 'b1'), false);
+    assert.deepEqual(tenantFilter(scopedDoctor, null), {
+      clinicId: 'c1',
+      branchId: { $in: ['b2'] },
+    });
+    assert.deepEqual(branchQuery(scopedDoctor, null), { branchId: { $in: ['b2'] } });
   });
 
   it('doctor all-branches query has no branch constraint', () => {
-    assert.deepEqual(branchQuery(doctor, null), {});
+    assert.deepEqual(branchQuery(clinicWideDoctor, null), {});
   });
 });
 

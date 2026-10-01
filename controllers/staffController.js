@@ -1,9 +1,21 @@
 import User from '../models/User.js';
 import { toAuthUser } from '../utils/authUser.js';
 import { asyncHandler } from '../middleware/access.js';
-import { clinicQuery, assertSameClinic, resolveAssignableBranches } from '../utils/branchScope.js';
+import {
+  clinicQuery,
+  assertSameClinic,
+  resolveAssignableBranches,
+  getAccessibleBranchIds,
+  primaryBranchId,
+} from '../utils/branchScope.js';
 import { parsePagination, paginated, escapeRegex } from '../utils/pagination.js';
-import { STAFF_TYPES, STAFF_TYPE_PERMISSIONS, sanitizePermissions } from '../utils/permissions.js';
+import {
+  STAFF_TYPES,
+  STAFF_TYPE_PERMISSIONS,
+  sanitizePermissions,
+  isStaffAccount,
+  P,
+} from '../utils/permissions.js';
 import { writeAudit, AUDIT } from '../utils/audit.js';
 
 const storedRoleForStaffType = (type) => {
@@ -11,6 +23,52 @@ const storedRoleForStaffType = (type) => {
   if (type === 'receptionist' || type === 'nurse' || type === 'assistant') return type;
   return 'assistant';
 };
+
+const toId = (value) => {
+  if (!value) return '';
+  if (typeof value === 'object') return String(value._id || value.id || '');
+  return String(value);
+};
+
+/** Staff actors must never receive branch-create rights. */
+const sanitizeStaffGrantedPermissions = (list) =>
+  sanitizePermissions(list).filter((p) => p !== P.BRANCHES_MANAGE);
+
+function targetBranchIds(user) {
+  return [
+    ...(user.branchIds || []).map((b) => toId(b)),
+    user.defaultBranchId ? toId(user.defaultBranchId) : null,
+  ].filter(Boolean);
+}
+
+/** Ensure actor may view/edit this staff record (own branch for scoped users). */
+function assertCanManageStaffTarget(actor, target) {
+  if (String(target._id) === String(actor._id)) return;
+  const allowed = getAccessibleBranchIds(actor);
+  if (allowed === null) return;
+  const targetBranches = targetBranchIds(target);
+  const inScope = targetBranches.some((id) => allowed.includes(String(id)));
+  if (!inScope) {
+    const err = new Error('You do not have access to this staff member.');
+    err.status = 403;
+    throw err;
+  }
+}
+
+/** Empty / All → every staff; a selected branch (including Main) → that branch only. */
+async function resolveStaffListBranchFilter(req) {
+  const allowed = getAccessibleBranchIds(req.user);
+  const raw = req.query.branchId || req.branchId || null;
+
+  if (Array.isArray(allowed)) {
+    if (!allowed.length) return { mode: 'none' };
+    if (raw && allowed.includes(toId(raw))) return { mode: 'one', branchId: toId(raw) };
+    return { mode: 'many', branchIds: allowed };
+  }
+
+  if (!raw) return { mode: 'all' };
+  return { mode: 'one', branchId: toId(raw) };
+}
 
 export const listStaff = asyncHandler(async (req, res) => {
   const { page, limit, skip } = parsePagination(req.query);
@@ -39,20 +97,30 @@ export const listStaff = asyncHandler(async (req, res) => {
       filter.staffStatus = 'active';
     }
   }
-  // Doctor branch selector: filter staff assigned to that branch (doctors stay clinic-wide).
-  const branchFilter = req.query.branchId || req.branchId;
-  if (branchFilter) {
+
+  const scope = await resolveStaffListBranchFilter(req);
+  if (scope.mode === 'none') {
+    filter._id = { $in: [] };
+  } else if (scope.mode === 'one') {
+    filter.$and = [
+      ...(filter.$and || []),
+      {
+        $or: [{ branchIds: scope.branchId }, { defaultBranchId: scope.branchId }],
+      },
+    ];
+  } else if (scope.mode === 'many') {
     filter.$and = [
       ...(filter.$and || []),
       {
         $or: [
-          { role: 'doctor' },
-          { branchIds: branchFilter },
-          { defaultBranchId: branchFilter },
+          { branchIds: { $in: scope.branchIds } },
+          { defaultBranchId: { $in: scope.branchIds } },
+          { _id: req.user._id },
         ],
       },
     ];
   }
+
   if (req.query.q?.trim()) {
     const q = escapeRegex(req.query.q.trim());
     filter.$and = [
@@ -73,8 +141,8 @@ export const listStaff = asyncHandler(async (req, res) => {
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
-      .populate('defaultBranchId', 'name')
-      .populate('branchIds', 'name'),
+      .populate('defaultBranchId', 'name isDefault')
+      .populate('branchIds', 'name isDefault'),
     User.countDocuments(filter),
   ]);
 
@@ -86,16 +154,35 @@ export const listStaff = asyncHandler(async (req, res) => {
 });
 
 export const getStaff = asyncHandler(async (req, res) => {
-  const user = await User.findById(req.params.id).select('-password').populate('branchIds', 'name').populate('defaultBranchId', 'name');
+  const user = await User.findById(req.params.id)
+    .select('-password')
+    .populate('branchIds', 'name')
+    .populate('defaultBranchId', 'name');
   if (!user) return res.status(404).json({ success: false, message: 'Staff not found.' });
   assertSameClinic(req.user, user.clinicId);
+
+  try {
+    assertCanManageStaffTarget(req.user, user);
+  } catch (err) {
+    return res.status(err.status || 403).json({ success: false, message: err.message });
+  }
+
   res.json({ success: true, staff: toAuthUser(user), branches: user.branchIds });
 });
 
 export const createStaff = asyncHandler(async (req, res) => {
   const { name, email, password, phone, role, staffType, branchIds, defaultBranchId, permissions, customRoleName, joiningDate, loginEnabled } = req.body;
   const type = String(staffType || role || '').trim();
+  const actorIsStaff = isStaffAccount(req.user);
   const isDoctor = type === 'doctor';
+
+  // Branch staff may only create peer staff for their own branch — never doctors or other branches.
+  if (actorIsStaff && isDoctor) {
+    return res.status(403).json({
+      success: false,
+      message: 'Staff members cannot create doctor accounts. Ask a Main branch doctor.',
+    });
+  }
   if (!isDoctor && !STAFF_TYPES.includes(type)) {
     return res.status(400).json({ success: false, message: 'Invalid staff type.' });
   }
@@ -122,7 +209,7 @@ export const createStaff = asyncHandler(async (req, res) => {
 
   const savedPermissions = isDoctor
     ? []
-    : sanitizePermissions(
+    : sanitizeStaffGrantedPermissions(
         Array.isArray(permissions) && permissions.length
           ? permissions
           : enableLogin
@@ -130,14 +217,50 @@ export const createStaff = asyncHandler(async (req, res) => {
             : []
       );
 
-  const assigned = await resolveAssignableBranches(
+  let requestedBranchIds = branchIds || (req.branchId ? [req.branchId] : []);
+  let requestedDefault = defaultBranchId || req.branchId || null;
+
+  // Staff actors are forced to their own primary branch.
+  if (actorIsStaff) {
+    const locked = primaryBranchId(req.user);
+    if (!locked) {
+      return res.status(403).json({
+        success: false,
+        message: 'No branch is assigned to this account. Ask a doctor to assign a branch.',
+      });
+    }
+    requestedBranchIds = [locked];
+    requestedDefault = locked;
+  }
+
+  let assigned = await resolveAssignableBranches(
     req.user.clinicId,
-    branchIds || (req.branchId ? [req.branchId] : []),
-    defaultBranchId || req.branchId || null
+    requestedBranchIds,
+    requestedDefault,
+    { actor: req.user }
   );
+
+  const allowedBranches = getAccessibleBranchIds(req.user);
+  const creatorScoped = Array.isArray(allowedBranches);
+
+  // Scoped branch doctors default new staff to their own branch when none selected.
+  if (creatorScoped && !assigned.branchIds.length && allowedBranches[0]) {
+    assigned = await resolveAssignableBranches(
+      req.user.clinicId,
+      [allowedBranches[0]],
+      allowedBranches[0],
+      { actor: req.user }
+    );
+  }
 
   if (!isDoctor && !assigned.branchIds.length) {
     return res.status(400).json({ success: false, message: 'Assign this staff member to a branch.' });
+  }
+  if (isDoctor && creatorScoped && !assigned.branchIds.length) {
+    return res.status(400).json({
+      success: false,
+      message: 'Assign this doctor to your branch.',
+    });
   }
 
   // Non-login staff still need a stored password hash — use a random unusable secret.
@@ -186,6 +309,13 @@ export const updateStaff = asyncHandler(async (req, res) => {
   if (user.role === 'super_admin') {
     return res.status(403).json({ success: false, message: 'Cannot modify this account.' });
   }
+  try {
+    assertCanManageStaffTarget(req.user, user);
+  } catch (err) {
+    return res.status(err.status || 403).json({ success: false, message: err.message });
+  }
+
+  const actorIsStaff = isStaffAccount(req.user);
   if (String(user._id) === String(req.user._id) && req.body.staffStatus && req.body.staffStatus !== 'active') {
     return res.status(400).json({ success: false, message: 'You cannot disable your own account.' });
   }
@@ -195,15 +325,20 @@ export const updateStaff = asyncHandler(async (req, res) => {
     if (req.body[field] !== undefined) user[field] = req.body[field];
   }
   if (req.body.branchIds || req.body.defaultBranchId !== undefined) {
-    const existingIds = [
-      ...(user.branchIds || []).map((b) => String(b._id || b)),
-      user.defaultBranchId ? String(user.defaultBranchId._id || user.defaultBranchId) : null,
-    ].filter(Boolean);
+    let nextBranchIds = req.body.branchIds || user.branchIds;
+    let nextDefault =
+      req.body.defaultBranchId !== undefined ? req.body.defaultBranchId : user.defaultBranchId;
+    if (actorIsStaff) {
+      const locked = primaryBranchId(req.user);
+      nextBranchIds = [locked];
+      nextDefault = locked;
+    }
+    const existingIds = targetBranchIds(user);
     const assigned = await resolveAssignableBranches(
       req.user.clinicId,
-      req.body.branchIds || user.branchIds,
-      req.body.defaultBranchId !== undefined ? req.body.defaultBranchId : user.defaultBranchId,
-      { allowPreserveIds: existingIds }
+      nextBranchIds,
+      nextDefault,
+      { allowPreserveIds: existingIds, actor: req.user }
     );
     if (user.role !== 'doctor' && !assigned.branchIds.length) {
       return res.status(400).json({ success: false, message: 'Assign this staff member to a branch.' });
@@ -212,7 +347,7 @@ export const updateStaff = asyncHandler(async (req, res) => {
     user.defaultBranchId = assigned.defaultBranchId;
   }
   if (Array.isArray(req.body.permissions) && user.role !== 'doctor') {
-    user.permissions = sanitizePermissions(req.body.permissions);
+    user.permissions = sanitizeStaffGrantedPermissions(req.body.permissions);
     await writeAudit({
       clinicId: user.clinicId,
       actorId: req.user._id,
@@ -225,6 +360,12 @@ export const updateStaff = asyncHandler(async (req, res) => {
 
   const nextType = req.body.staffType || req.body.role;
   if (nextType === 'doctor') {
+    if (actorIsStaff) {
+      return res.status(403).json({
+        success: false,
+        message: 'Staff members cannot promote accounts to doctor.',
+      });
+    }
     const wasDoctor = user.role === 'doctor';
     user.role = 'doctor';
     user.staffType = '';
@@ -267,11 +408,17 @@ export const updateStaff = asyncHandler(async (req, res) => {
     }
     user.loginEnabled = nextLogin;
     if (nextLogin && (!user.permissions || user.permissions.length === 0)) {
-      user.permissions = STAFF_TYPE_PERMISSIONS[user.staffType] || [];
+      user.permissions = sanitizeStaffGrantedPermissions(STAFF_TYPE_PERMISSIONS[user.staffType] || []);
     }
   }
 
   if (req.body.staffStatus) {
+    if (actorIsStaff && user.role === 'doctor') {
+      return res.status(403).json({
+        success: false,
+        message: 'Staff members cannot approve or suspend doctors.',
+      });
+    }
     user.staffStatus = req.body.staffStatus;
     user.isActive = req.body.staffStatus === 'active';
     if (user.role === 'doctor') {

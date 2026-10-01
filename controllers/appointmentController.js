@@ -636,7 +636,7 @@ export const getDoctorDashboardStats = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Doctors only.' });
     }
 
-    const doctorId = req.user._id;
+    // All dashboard metrics follow clinic + selected branch (same as Patients / Calendar lists).
     const branchScope = tenantFilter(req.user, req.branchId);
     const periodRaw = String(req.query.period || 'today').toLowerCase();
     const period = ['today', 'week', 'month'].includes(periodRaw) ? periodRaw : 'today';
@@ -666,15 +666,17 @@ export const getDoctorDashboardStats = async (req, res) => {
     const weekAgo = new Date(dayStart);
     weekAgo.setDate(weekAgo.getDate() - 7);
 
+    const patientFilter = { isActive: true, ...branchScope };
+    const appointmentFilter = { ...branchScope };
+
     const [periodAppts, allAppts, totalPatients, newPatients] = await Promise.all([
       Appointment.find({
-        ...branchScope,
-        doctor: doctorId,
+        ...appointmentFilter,
         appointmentDate: { $gte: rangeStart, $lte: rangeEnd },
       }).populate(APPT_POPULATE),
-      Appointment.find({ ...branchScope, doctor: doctorId }).select('status patientId appointmentDate'),
-      Patient.countDocuments({ ...branchScope, doctorId, isActive: true }),
-      Patient.countDocuments({ ...branchScope, doctorId, isActive: true, createdAt: { $gte: weekAgo } }),
+      Appointment.find(appointmentFilter).select('status patientId appointmentDate'),
+      Patient.countDocuments(patientFilter),
+      Patient.countDocuments({ ...patientFilter, createdAt: { $gte: weekAgo } }),
     ]);
 
     const countByStatus = (list, status) =>
@@ -692,10 +694,30 @@ export const getDoctorDashboardStats = async (req, res) => {
       periodAppts.map((a) => (a.patientId?._id || a.patientId ? String(a.patientId._id || a.patientId) : '')).filter(Boolean)
     ).size;
 
-    const recentPatients = await Patient.find({ ...branchScope, doctorId, isActive: true })
-      .sort({ createdAt: -1 })
-      .limit(5)
-      .select('name patientCode phone createdAt gender age');
+    // Recent patients in this period (from appointments), else latest in branch scope.
+    const periodPatientIds = [
+      ...new Set(
+        periodAppts
+          .map((a) => String(a.patientId?._id || a.patientId || ''))
+          .filter(Boolean)
+      ),
+    ].slice(0, 8);
+
+    let recentPatients = [];
+    if (periodPatientIds.length) {
+      const found = await Patient.find({
+        ...patientFilter,
+        _id: { $in: periodPatientIds },
+      }).select('name patientCode phone createdAt gender age');
+      const byId = Object.fromEntries(found.map((p) => [String(p._id), p]));
+      recentPatients = periodPatientIds.map((id) => byId[id]).filter(Boolean).slice(0, 5);
+    }
+    if (!recentPatients.length) {
+      recentPatients = await Patient.find(patientFilter)
+        .sort({ createdAt: -1 })
+        .limit(5)
+        .select('name patientCode phone createdAt gender age');
+    }
 
     const Invoice = (await import('../models/Invoice.js')).default;
     const Prescription = (await import('../models/Prescription.js')).default;
@@ -705,13 +727,12 @@ export const getDoctorDashboardStats = async (req, res) => {
 
     const [ownRevenue, rxCount, upcomingNext] = await Promise.all([
       Invoice.aggregate([
-        { $match: { ...branchScope, doctorId, paymentStatus: { $ne: 'cancelled' } } },
+        { $match: { ...branchScope, paymentStatus: { $ne: 'cancelled' } } },
         { $group: { _id: null, paid: { $sum: '$paidAmount' }, billed: { $sum: '$total' }, due: { $sum: '$dueAmount' } } },
       ]),
-      Prescription.countDocuments({ ...branchScope, doctorId }),
+      Prescription.countDocuments(branchScope),
       Appointment.find({
-        ...branchScope,
-        doctor: doctorId,
+        ...appointmentFilter,
         status: { $in: ACTIVE_APPOINTMENT_STATUSES },
         appointmentDate: { $gte: tomorrowStart },
       })
@@ -726,13 +747,16 @@ export const getDoctorDashboardStats = async (req, res) => {
       return String(a.timeSlot || '').localeCompare(String(b.timeSlot || ''));
     });
 
+    const completedInPeriod = countByStatus(sortedPeriodAppts, 'completed');
+    const completedAll = countByStatus(allAppts, 'completed');
+
     const periodStats = {
       key: period,
       from: rangeStart.toISOString(),
       to: rangeEnd.toISOString(),
       total: sortedPeriodAppts.length,
       scheduled: countByStatus(sortedPeriodAppts, 'scheduled') + countByStatus(sortedPeriodAppts, 'confirmed'),
-      completed: countByStatus(sortedPeriodAppts, 'completed'),
+      completed: completedInPeriod,
       cancelled: countByStatus(sortedPeriodAppts, 'cancelled'),
       noShow: countByStatus(sortedPeriodAppts, 'no_show'),
       patients: patientsInPeriod,
@@ -763,7 +787,7 @@ export const getDoctorDashboardStats = async (req, res) => {
           upcoming: allAppts.filter((a) =>
             ACTIVE_APPOINTMENT_STATUSES.includes(normalizeStatus(a.status))
           ).length,
-          completed: countByStatus(allAppts, 'completed'),
+          completed: completedAll,
           cancelled: countByStatus(allAppts, 'cancelled'),
           noShow: countByStatus(allAppts, 'no_show'),
           next: upcomingNext,

@@ -2,8 +2,10 @@ import { hasPermission, hasAnyPermission, STAFF_ROLES, isApprovedDoctor, isActiv
 import {
   resolveRequestedBranchId,
   getAccessibleBranchIds,
-  primaryBranchId,
+  resolveStaffBranchId,
   assertStaffBranchOperational,
+  resolveAccessibleBranchIds,
+  attachAccessibleBranches,
 } from '../utils/branchScope.js';
 
 export const STAFF = STAFF_ROLES;
@@ -75,7 +77,20 @@ export const attachBranchContext = async (req, res, next) => {
       await assertStaffBranchOperational(req.user);
     }
 
+    // Resolve doctor Main=all vs scoped-branch once per request.
+    const accessible = await resolveAccessibleBranchIds(req.user);
+    attachAccessibleBranches(req.user, accessible);
+    req.accessibleBranchIds = accessible;
+    req.clinicWideAccess = accessible === null;
+
     const mutating = !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
+
+    // Staff: always lock to assigned primary branch (ignore stale X-Branch-Id from prior doctor session).
+    if (isStaffAccount(req.user)) {
+      req.branchId = await resolveStaffBranchId(req.user, { forWrite: mutating });
+      return next();
+    }
+
     const requested = req.headers['x-branch-id'] || req.query.branchId || null;
     const raw =
       requested && String(requested) !== 'null' && String(requested) !== 'undefined' && String(requested) !== ''
@@ -87,12 +102,13 @@ export const attachBranchContext = async (req, res, next) => {
       return next();
     }
 
-    if (isStaffAccount(req.user)) {
-      // Staff never use All-branches — always lock to primary assignment.
-      req.branchId = primaryBranchId(req.user) || getAccessibleBranchIds(req.user)[0] || null;
+    // Scoped doctor with a single branch: lock filter to that branch when no header.
+    if (Array.isArray(accessible) && accessible.length === 1) {
+      req.branchId = accessible[0];
       return next();
     }
 
+    // Clinic-wide doctor (Main) or multi-branch: null = all accessible branches.
     req.branchId = null;
     next();
   } catch (err) {

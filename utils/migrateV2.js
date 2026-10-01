@@ -83,7 +83,7 @@ const DEFAULT_CLINICAL_TEMPLATES = [
   },
 ];
 
-export async function seedClinicTemplates(clinicId) {
+export async function seedClinicTemplates(clinicId, branchId = null) {
   if (!clinicId) return 0;
   let created = 0;
   for (const t of DEFAULT_CLINICAL_TEMPLATES) {
@@ -91,11 +91,13 @@ export async function seedClinicTemplates(clinicId) {
       clinicId,
       name: t.name,
       ownerType: 'clinic',
+      ...(branchId ? { branchId } : {}),
     });
     if (existing) continue;
     await ClinicalTemplate.create({
       ...t,
       clinicId,
+      branchId: branchId || null,
       ownerType: 'clinic',
       doctorId: null,
       isActive: true,
@@ -196,13 +198,17 @@ export const migrateV2Foundation = async () => {
     const paymentResult = await Payment.updateMany(missingBranch, { $set: { branchId: defaultBranch._id } });
     const consultResult = await Consultation.updateMany(missingBranch, { $set: { branchId: defaultBranch._id } });
     const rxResult = await Prescription.updateMany(missingBranch, { $set: { branchId: defaultBranch._id } });
+    const templateResult = await ClinicalTemplate.updateMany(missingBranch, {
+      $set: { branchId: defaultBranch._id },
+    });
     extraPatched +=
       (invoiceResult.modifiedCount || 0) +
       (paymentResult.modifiedCount || 0) +
       (consultResult.modifiedCount || 0) +
-      (rxResult.modifiedCount || 0);
+      (rxResult.modifiedCount || 0) +
+      (templateResult.modifiedCount || 0);
 
-    const seeded = await seedClinicTemplates(clinic._id);
+    const seeded = await seedClinicTemplates(clinic._id, defaultBranch._id);
     if (seeded) {
       console.log(`Seeded ${seeded} clinical templates for ${clinic.name}`);
     }

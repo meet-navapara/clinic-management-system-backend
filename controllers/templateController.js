@@ -1,29 +1,41 @@
 import ClinicalTemplate from '../models/ClinicalTemplate.js';
 import { asyncHandler } from '../middleware/access.js';
-import { clinicQuery, assertSameClinic } from '../utils/branchScope.js';
+import {
+  clinicQuery,
+  assertSameClinic,
+  assertBranchAccess,
+  tenantFilter,
+  resolveWriteBranchId,
+} from '../utils/branchScope.js';
 import { hasPermission, P } from '../utils/permissions.js';
 import { seedClinicTemplates } from '../utils/migrateV2.js';
 
 export const listTemplates = asyncHandler(async (req, res) => {
   const clinicId = req.user.clinicId;
   if (clinicId) {
-    const existing = await ClinicalTemplate.countDocuments({ clinicId, isActive: true });
+    const existing = await ClinicalTemplate.countDocuments({
+      clinicId,
+      isActive: true,
+      ...tenantFilter(req.user, req.branchId),
+    });
     if (existing === 0) {
-      await seedClinicTemplates(clinicId);
+      const branchId = await resolveWriteBranchId(req.user, req.branchId).catch(() => null);
+      await seedClinicTemplates(clinicId, branchId);
     }
   }
 
   const clinic = clinicQuery(req.user);
-  const or = [{ ownerType: 'clinic', ...clinic }];
+  const branch = tenantFilter(req.user, req.branchId);
+  const or = [{ ownerType: 'clinic', ...clinic, ...branch }];
 
   if (req.user.role === 'doctor') {
-    or.push({ ownerType: 'doctor', doctorId: req.user._id, ...clinic });
+    or.push({ ownerType: 'doctor', doctorId: req.user._id, ...clinic, ...branch });
   } else if (hasPermission(req.user, P.TEMPLATES_CLINIC)) {
-    // Clinic managers can see every private template for editing.
-    or.push({ ownerType: 'doctor', ...clinic });
+    // Clinic managers can see every private template for editing (within branch scope).
+    or.push({ ownerType: 'doctor', ...clinic, ...branch });
   } else if (hasPermission(req.user, P.TEMPLATES_OWN)) {
     // Staff with own-only: their templates (if any), never other doctors' private ones.
-    or.push({ ownerType: 'doctor', doctorId: req.user._id, ...clinic });
+    or.push({ ownerType: 'doctor', doctorId: req.user._id, ...clinic, ...branch });
   }
   // CONSULTATION-only callers get clinic-shared templates only (or above).
 
@@ -53,8 +65,10 @@ export const createTemplate = asyncHandler(async (req, res) => {
   if (ownerType === 'clinic' && !hasPermission(req.user, P.TEMPLATES_CLINIC)) {
     return res.status(403).json({ success: false, message: 'Cannot create clinic-wide templates.' });
   }
+  const branchId = await resolveWriteBranchId(req.user, req.branchId);
   const template = await ClinicalTemplate.create({
     clinicId: req.user.clinicId,
+    branchId,
     doctorId: ownerType === 'doctor' ? req.user._id : null,
     ownerType,
     type: req.body.type || 'consultation',
@@ -68,6 +82,7 @@ export const updateTemplate = asyncHandler(async (req, res) => {
   const template = await ClinicalTemplate.findById(req.params.id);
   if (!template) return res.status(404).json({ success: false, message: 'Template not found.' });
   assertSameClinic(req.user, template.clinicId);
+  assertBranchAccess(req.user, template.branchId);
   if (
     template.ownerType === 'doctor' &&
     String(template.doctorId) !== String(req.user._id) &&
@@ -87,6 +102,10 @@ export const updateTemplate = asyncHandler(async (req, res) => {
     const next = req.body.ownerType === 'clinic' ? 'clinic' : 'doctor';
     template.ownerType = next;
     template.doctorId = next === 'doctor' ? template.doctorId || req.user._id : null;
+  }
+  // Keep template on its branch unless actor can assign and supplies a branch (header already scoped).
+  if (!template.branchId) {
+    template.branchId = await resolveWriteBranchId(req.user, req.branchId);
   }
   await template.save();
   res.json({ success: true, template });

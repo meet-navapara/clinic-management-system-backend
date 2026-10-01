@@ -13,7 +13,6 @@ export const listMyNotifications = async (req, res) => {
     if (req.user.role === 'doctor') {
       const Appointment = (await import('../models/Appointment.js')).default;
       const apptIds = await Appointment.find({
-        doctor: req.user._id,
         ...tenantFilter(req.user, req.branchId),
       }).distinct('_id');
       filter.appointmentId = { $in: apptIds };

@@ -1,7 +1,7 @@
 /**
  * Shared user payload for auth responses (never includes password).
  */
-export const toAuthUser = (user) => {
+export const toAuthUser = (user, extras = {}) => {
   if (!user) return null;
 
   const doc = typeof user.toObject === 'function' ? user.toObject() : user;
@@ -57,5 +57,17 @@ export const toAuthUser = (user) => {
     loginEnabled: doc.role === 'doctor' || doc.role === 'super_admin' ? true : Boolean(doc.loginEnabled),
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
+    ...extras,
   };
 };
+
+/** Enrich auth payload with resolved branch scope (Main = clinic-wide). */
+export async function toAuthUserWithScope(user) {
+  if (!user) return null;
+  const { resolveAccessibleBranchIds } = await import('./branchScope.js');
+  const accessibleBranchIds = await resolveAccessibleBranchIds(user);
+  return toAuthUser(user, {
+    clinicWideAccess: accessibleBranchIds === null,
+    accessibleBranchIds: accessibleBranchIds === null ? null : accessibleBranchIds,
+  });
+}

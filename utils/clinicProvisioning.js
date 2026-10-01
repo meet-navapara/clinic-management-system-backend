@@ -75,7 +75,7 @@ export const provisionClinicForDoctor = async ({
   });
 
   try {
-    await seedClinicTemplates(clinic._id);
+    await seedClinicTemplates(clinic._id, branch._id);
   } catch {
     /* templates are optional at signup */
   }
