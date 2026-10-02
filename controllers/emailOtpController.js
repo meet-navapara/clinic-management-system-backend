@@ -211,3 +211,131 @@ export async function verifySignupEmailOtp(req, res) {
     });
   }
 }
+
+/** Staff/doctor accounts created by the clinic must verify email before first login. */
+export async function sendLoginEmailOtp(req, res) {
+  try {
+    const email = normalizeEmail(req.body.email);
+    if (!email || !email.includes('@')) {
+      return res.status(422).json({
+        success: false,
+        message: 'Valid email is required.',
+        errors: { email: 'Valid email is required.' },
+      });
+    }
+
+    const user = await User.findOne({ email }).select(
+      'role loginEnabled emailVerified staffStatus isActive approvalStatus'
+    );
+    if (!user || user.role === 'patient' || user.role === 'super_admin') {
+      return res.status(404).json({
+        success: false,
+        message: 'No account found that needs email verification for this address.',
+      });
+    }
+
+    const isStaff = user.role !== 'doctor';
+    if (isStaff && user.loginEnabled !== true) {
+      return res.status(403).json({
+        success: false,
+        message: 'Staff login is disabled. Ask a doctor to enable access for this account.',
+      });
+    }
+
+    if (user.emailVerified === true) {
+      return res.status(400).json({
+        success: false,
+        message: 'This email is already verified. You can sign in.',
+        code: 'EMAIL_ALREADY_VERIFIED',
+      });
+    }
+
+    if (user.staffStatus === 'suspended' || user.staffStatus === 'inactive' || user.isActive === false) {
+      return res.status(403).json({
+        success: false,
+        message: 'Your account is not active. Contact the clinic.',
+      });
+    }
+
+    const meta = await issueAndSendOtp({
+      email,
+      purpose: 'login_verify',
+      subject: 'Your Z Health login verification code',
+      intro: 'Verify your clinic email to finish signing in. Your code is:',
+    });
+
+    return res.json({
+      success: true,
+      message: 'Verification code sent to your email.',
+      ...meta,
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json({
+      success: false,
+      message: error.message || 'Could not send verification code.',
+      ...(error.cooldownSeconds ? { cooldownSeconds: error.cooldownSeconds } : {}),
+    });
+  }
+}
+
+export async function verifyLoginEmailOtp(req, res) {
+  try {
+    const email = normalizeEmail(req.body.email);
+    const otp = normalizeOtpInput(req.body.otp);
+
+    if (!email || !email.includes('@')) {
+      return res.status(422).json({
+        success: false,
+        message: 'Valid email is required.',
+        errors: { email: 'Valid email is required.' },
+      });
+    }
+    if (otp.length !== OTP_LENGTH) {
+      return res.status(422).json({
+        success: false,
+        message: `Enter the ${OTP_LENGTH}-digit verification code.`,
+        errors: { otp: `Enter the ${OTP_LENGTH}-digit verification code.` },
+      });
+    }
+
+    const user = await User.findOne({ email });
+    if (!user || user.role === 'patient' || user.role === 'super_admin') {
+      return res.status(404).json({
+        success: false,
+        message: 'No account found that needs email verification for this address.',
+      });
+    }
+
+    if (user.emailVerified === true) {
+      return res.json({
+        success: true,
+        message: 'Email is already verified. You can sign in.',
+        verified: true,
+        code: 'EMAIL_ALREADY_VERIFIED',
+      });
+    }
+
+    await verifyOtpCode({ email, otp, purpose: 'login_verify' });
+    user.emailVerified = true;
+    await user.save();
+
+    const record = await EmailOtp.findOne({ email, purpose: 'login_verify' });
+    if (record) {
+      record.consumedAt = new Date();
+      record.otpHash = null;
+      await record.save();
+    }
+
+    return res.json({
+      success: true,
+      message: 'Email verified successfully. You can sign in now.',
+      verified: true,
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json({
+      success: false,
+      message: error.message || 'Could not verify code.',
+      ...(error.attemptsRemaining != null ? { attemptsRemaining: error.attemptsRemaining } : {}),
+    });
+  }
+}

@@ -127,6 +127,15 @@ const assertSlotAvailable = async ({
   return { ok: true };
 };
 
+const assertCanAccessAppointment = (req, appointment) => {
+  if (!isSameClinic(req.user, appointment.clinicId)) return false;
+  if (!canAccessBranch(req.user, appointment.branchId)) return false;
+  if (req.user.role === 'doctor') return true;
+  return (
+    hasPermission(req.user, P.APPOINTMENTS_VIEW) || hasPermission(req.user, P.APPOINTMENTS_MANAGE)
+  );
+};
+
 const assertCanManageAppointment = (req, appointment) => {
   if (!isSameClinic(req.user, appointment.clinicId)) return false;
   if (!canAccessBranch(req.user, appointment.branchId)) return false;
@@ -378,7 +387,7 @@ export const getAppointmentById = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Appointment not found.' });
     }
 
-    if (!assertCanManageAppointment(req, appointment)) {
+    if (!assertCanAccessAppointment(req, appointment)) {
       return res.status(403).json({ success: false, message: 'Not authorized.' });
     }
 
@@ -638,8 +647,9 @@ export const getDoctorDashboardStats = async (req, res) => {
 
     // All dashboard metrics follow clinic + selected branch (same as Patients / Calendar lists).
     const branchScope = tenantFilter(req.user, req.branchId);
-    const periodRaw = String(req.query.period || 'today').toLowerCase();
-    const period = ['today', 'week', 'month'].includes(periodRaw) ? periodRaw : 'today';
+    const periodRaw = String(req.query.period || '').toLowerCase();
+    const fromRaw = String(req.query.from || '').trim();
+    const toRaw = String(req.query.to || '').trim();
 
     const now = new Date();
     const dayStart = new Date(now);
@@ -647,20 +657,42 @@ export const getDoctorDashboardStats = async (req, res) => {
     const dayEnd = new Date(now);
     dayEnd.setHours(23, 59, 59, 999);
 
+    const parseDay = (value, endOfDay = false) => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+      const d = new Date(`${value}T00:00:00`);
+      if (Number.isNaN(d.getTime())) return null;
+      if (endOfDay) d.setHours(23, 59, 59, 999);
+      return d;
+    };
+
     let rangeStart = dayStart;
     let rangeEnd = dayEnd;
-    if (period === 'week') {
-      // Monday-start week containing today
-      const dow = dayStart.getDay(); // 0 Sun … 6 Sat
-      const offsetToMon = dow === 0 ? -6 : 1 - dow;
-      rangeStart = new Date(dayStart);
-      rangeStart.setDate(dayStart.getDate() + offsetToMon);
-      rangeEnd = new Date(rangeStart);
-      rangeEnd.setDate(rangeStart.getDate() + 6);
-      rangeEnd.setHours(23, 59, 59, 999);
-    } else if (period === 'month') {
-      rangeStart = new Date(dayStart.getFullYear(), dayStart.getMonth(), 1);
-      rangeEnd = new Date(dayStart.getFullYear(), dayStart.getMonth() + 1, 0, 23, 59, 59, 999);
+    let period = 'custom';
+
+    if (fromRaw || toRaw) {
+      const parsedFrom = parseDay(fromRaw, false) || dayStart;
+      const parsedTo = parseDay(toRaw, true) || dayEnd;
+      rangeStart = parsedFrom <= parsedTo ? parsedFrom : parsedTo;
+      rangeEnd = parsedFrom <= parsedTo ? parsedTo : parsedFrom;
+      if (fromRaw === toRaw) period = 'today';
+      else period = 'custom';
+    } else {
+      period = ['today', 'week', 'month', 'last7', 'lastMonth', 'thisMonth'].includes(periodRaw)
+        ? periodRaw
+        : 'today';
+      if (period === 'week' || period === 'last7') {
+        rangeStart = new Date(dayStart);
+        rangeStart.setDate(dayStart.getDate() - 6);
+        rangeEnd = dayEnd;
+      } else if (period === 'lastMonth') {
+        const y = dayStart.getFullYear();
+        const m = dayStart.getMonth();
+        rangeStart = new Date(y, m - 1, 1);
+        rangeEnd = new Date(y, m, 0, 23, 59, 59, 999);
+      } else if (period === 'month' || period === 'thisMonth') {
+        rangeStart = new Date(dayStart.getFullYear(), dayStart.getMonth(), 1);
+        rangeEnd = new Date(dayStart.getFullYear(), dayStart.getMonth() + 1, 0, 23, 59, 59, 999);
+      }
     }
 
     const weekAgo = new Date(dayStart);

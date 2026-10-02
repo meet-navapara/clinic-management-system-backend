@@ -408,6 +408,16 @@ export const login = async (req, res) => {
       return res.status(401).json({ success: false, message: 'Invalid email or password.' });
     }
 
+    // Clinic-created staff/doctors must verify email via OTP before first login.
+    if (user.role !== 'super_admin' && user.emailVerified !== true) {
+      return res.status(403).json({
+        success: false,
+        code: 'EMAIL_NOT_VERIFIED',
+        message: 'Please verify your email before signing in. We can send a one-time code to this address.',
+        email: user.email,
+      });
+    }
+
     if (isStaffAccount(user)) {
       try {
         await assertStaffBranchOperational(user);

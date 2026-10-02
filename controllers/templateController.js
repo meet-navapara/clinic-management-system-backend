@@ -9,6 +9,7 @@ import {
 } from '../utils/branchScope.js';
 import { hasPermission, P } from '../utils/permissions.js';
 import { seedClinicTemplates } from '../utils/migrateV2.js';
+import { parsePagination, paginated } from '../utils/pagination.js';
 
 export const listTemplates = asyncHandler(async (req, res) => {
   const clinicId = req.user.clinicId;
@@ -52,8 +53,16 @@ export const listTemplates = asyncHandler(async (req, res) => {
     filter.name = new RegExp(String(req.query.q).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
   }
 
-  const templates = await ClinicalTemplate.find(filter).sort({ isActive: -1, ownerType: 1, name: 1 }).lean();
-  res.json({ success: true, templates });
+  const { page, limit, skip } = parsePagination(req.query, { limit: 10 });
+  const [total, templates] = await Promise.all([
+    ClinicalTemplate.countDocuments(filter),
+    ClinicalTemplate.find(filter)
+      .sort({ isActive: -1, ownerType: 1, name: 1 })
+      .skip(skip)
+      .limit(limit)
+      .lean(),
+  ]);
+  res.json({ success: true, ...paginated({ items: templates, total, page, limit }), templates });
 });
 
 export const createTemplate = asyncHandler(async (req, res) => {

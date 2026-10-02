@@ -79,15 +79,16 @@ const visitSnippet = (a) =>
       }
     : null;
 
-const attachVisitSummary = async (patients, doctorId) => {
+const attachVisitSummary = async (patients, doctorId, branchScope = {}) => {
   if (!patients.length) return [];
   const ids = patients.map((p) => p._id);
   const now = new Date();
   const appts = await Appointment.find({
     patientId: { $in: ids },
     ...(doctorId ? { doctor: doctorId } : {}),
+    ...branchScope,
   })
-    .select('patientId appointmentDate timeSlot status')
+    .select('patientId appointmentDate timeSlot status branchId')
     .sort({ appointmentDate: -1 })
     .lean();
 
@@ -336,7 +337,11 @@ export const listMyPatients = async (req, res) => {
       Patient.countDocuments(filter),
     ]);
 
-    const withVisits = await attachVisitSummary(patients, null);
+    const withVisits = await attachVisitSummary(
+      patients,
+      null,
+      tenantFilter(req.user, req.branchId)
+    );
 
     res.json({
       success: true,

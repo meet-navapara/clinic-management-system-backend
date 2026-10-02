@@ -28,6 +28,7 @@ import { migratePracticeDomain } from './utils/migratePracticeDomain.js';
 import { migrateV2Foundation } from './utils/migrateV2.js';
 import { migrateAuthRoles } from './utils/migrateAuthRoles.js';
 import { migrateDoctorClinicIsolation } from './utils/migrateDoctorClinicIsolation.js';
+import { migrateEmailVerified } from './utils/migrateEmailVerified.js';
 import { apiLimiter } from './middleware/rateLimit.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -80,6 +81,11 @@ export function ensureDb() {
           console.warn('Doctor clinic isolation migrate skipped:', err.message);
         }
         try {
+          await migrateEmailVerified();
+        } catch (err) {
+          console.warn('Email verified migrate skipped:', err.message);
+        }
+        try {
           const EmailOtp = (await import('./models/EmailOtp.js')).default;
           await EmailOtp.syncIndexes();
         } catch (err) {
@@ -125,11 +131,24 @@ const configuredOrigins = String(process.env.CLIENT_ORIGINS || process.env.CLIEN
   .filter(Boolean);
 const allowedOrigins = [...new Set([...defaultOrigins, ...configuredOrigins])];
 
+function isPrivateLanHostname(hostname) {
+  if (!hostname) return false;
+  if (hostname === 'localhost' || hostname === '127.0.0.1') return true;
+  if (/^192\.168\.\d{1,3}\.\d{1,3}$/.test(hostname)) return true;
+  if (/^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname)) return true;
+  if (/^172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}$/.test(hostname)) return true;
+  return false;
+}
+
 function isAllowedOrigin(origin) {
   if (!origin) return true;
   if (allowedOrigins.includes(origin)) return true;
   try {
     const { protocol, hostname } = new URL(origin);
+    // Allow phone/tablet on same Wi‑Fi during local development
+    if (process.env.NODE_ENV !== 'production' && protocol === 'http:' && isPrivateLanHostname(hostname)) {
+      return true;
+    }
     if (protocol !== 'https:') return false;
     // Vercel preview / production aliases
     if (hostname === 'vercel.app' || hostname.endsWith('.vercel.app')) return true;

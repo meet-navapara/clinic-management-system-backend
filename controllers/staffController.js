@@ -285,6 +285,8 @@ export const createStaff = asyncHandler(async (req, res) => {
     staffStatus: 'active',
     isActive: true,
     loginEnabled: enableLogin,
+    // Login-capable accounts must verify email via OTP before first sign-in.
+    emailVerified: false,
     // Doctors created via Staff stay pending until a clinic doctor approves them.
     approvalStatus: isDoctor ? 'pending' : 'approved',
   });
@@ -375,6 +377,7 @@ export const updateStaff = asyncHandler(async (req, res) => {
       user.approvalStatus = 'pending';
       user.isActive = true;
       user.staffStatus = 'active';
+      if (user.emailVerified !== true) user.emailVerified = false;
     }
   } else if (nextType && STAFF_TYPES.includes(nextType) && user.role !== 'doctor') {
     user.staffType = nextType;
@@ -407,6 +410,10 @@ export const updateStaff = asyncHandler(async (req, res) => {
       });
     }
     user.loginEnabled = nextLogin;
+    if (nextLogin) {
+      // Re-enable requires email verification again when login was off / newly enabled.
+      if (enablingLogin) user.emailVerified = false;
+    }
     if (nextLogin && (!user.permissions || user.permissions.length === 0)) {
       user.permissions = sanitizeStaffGrantedPermissions(STAFF_TYPE_PERMISSIONS[user.staffType] || []);
     }

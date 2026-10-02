@@ -26,7 +26,7 @@ import {
   emailOtpVerifyValidation,
 } from '../middleware/validators.js';
 import { authLimiter, loginLimiter, passwordResetLimiter, emailOtpLimiter } from '../middleware/rateLimit.js';
-import { sendSignupEmailOtp, verifySignupEmailOtp } from '../controllers/emailOtpController.js';
+import { sendSignupEmailOtp, verifySignupEmailOtp, sendLoginEmailOtp, verifyLoginEmailOtp } from '../controllers/emailOtpController.js';
 
 const router = Router();
 
@@ -44,6 +44,20 @@ router.post(
   emailOtpVerifyValidation,
   handleValidation,
   verifySignupEmailOtp
+);
+router.post(
+  '/email-otp/login/send',
+  emailOtpLimiter,
+  emailOtpSendValidation,
+  handleValidation,
+  sendLoginEmailOtp
+);
+router.post(
+  '/email-otp/login/verify',
+  emailOtpLimiter,
+  emailOtpVerifyValidation,
+  handleValidation,
+  verifyLoginEmailOtp
 );
 router.post('/register', authLimiter, registerValidation, handleValidation, register);
 router.post(
